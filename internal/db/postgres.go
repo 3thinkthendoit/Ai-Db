@@ -247,9 +247,23 @@ func (d *postgresDriver) listSequences(ctx context.Context, schema string) ([]st
 }
 
 func (d *postgresDriver) listColumnNodes(ctx context.Context, schema, table string) ([]ObjectNode, error) {
+	// EXISTS avoids duplicate rows when a column participates in multiple constraints.
 	q := fmt.Sprintf(
-		"SELECT column_name, data_type FROM information_schema.columns "+
-			"WHERE table_schema='%s' AND table_name='%s' ORDER BY ordinal_position",
+		"SELECT c.column_name, c.data_type, "+
+			"CASE WHEN EXISTS ("+
+			"  SELECT 1 FROM information_schema.table_constraints tc "+
+			"  JOIN information_schema.key_column_usage kcu "+
+			"    ON kcu.constraint_schema = tc.constraint_schema "+
+			"   AND kcu.constraint_name = tc.constraint_name "+
+			"   AND kcu.table_schema = tc.table_schema "+
+			"   AND kcu.table_name = tc.table_name "+
+			"  WHERE tc.constraint_type = 'PRIMARY KEY' "+
+			"    AND tc.table_schema = c.table_schema AND tc.table_name = c.table_name "+
+			"    AND kcu.column_name = c.column_name"+
+			") THEN 'PRI' ELSE '' END AS column_key "+
+			"FROM information_schema.columns c "+
+			"WHERE c.table_schema='%s' AND c.table_name='%s' "+
+			"ORDER BY c.ordinal_position",
 		escapeSQLLiteral(schema), escapeSQLLiteral(table))
 	res, err := execSQL(ctx, d.db, q, 2000, false)
 	if err != nil {
@@ -264,7 +278,11 @@ func (d *postgresDriver) listColumnNodes(ctx context.Context, schema, table stri
 		if len(r) > 1 && r[1] != "" {
 			label = r[0] + " · " + r[1]
 		}
-		out = append(out, ObjectNode{Name: label, Kind: "column"})
+		n := ObjectNode{Name: label, Kind: "column"}
+		if len(r) > 2 && strings.EqualFold(r[2], "PRI") {
+			n.Badge = "PK"
+		}
+		out = append(out, n)
 	}
 	return out, nil
 }

@@ -24,6 +24,8 @@ type ObjectNode struct {
 	Name     string       `json:"name"`
 	Kind     string       `json:"kind"`
 	Lazy     bool         `json:"lazy,omitempty"`
+	// Badge is a short UI tag (e.g. "PK" for primary-key columns).
+	Badge    string       `json:"badge,omitempty"`
 	Children []ObjectNode `json:"children,omitempty"`
 }
 
@@ -76,7 +78,12 @@ func stringify(v any) string {
 	case []byte:
 		return string(t)
 	case time.Time:
-		return t.Format(time.RFC3339Nano)
+		// Prefer a readable wall clock over RFC3339 (...T...Z), which looks like a bug in result grids.
+		// Keep the driver location's clock digits (MySQL ParseTime defaults to UTC for DATETIME).
+		if t.Nanosecond() == 0 {
+			return t.Format("2006-01-02 15:04:05")
+		}
+		return t.Format("2006-01-02 15:04:05.000")
 	default:
 		return fmt.Sprint(t)
 	}

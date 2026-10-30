@@ -264,7 +264,7 @@ func (d *mysqlDriver) listEvents(ctx context.Context, schema string) ([]string, 
 
 func (d *mysqlDriver) listColumnNodes(ctx context.Context, schema, table string) ([]ObjectNode, error) {
 	q := fmt.Sprintf(
-		"SELECT COLUMN_NAME, COLUMN_TYPE FROM information_schema.COLUMNS "+
+		"SELECT COLUMN_NAME, COLUMN_TYPE, COLUMN_KEY FROM information_schema.COLUMNS "+
 			"WHERE TABLE_SCHEMA='%s' AND TABLE_NAME='%s' ORDER BY ORDINAL_POSITION",
 		escapeSQLLiteral(schema), escapeSQLLiteral(table))
 	res, err := execSQL(ctx, d.db, q, 2000, false)
@@ -280,7 +280,11 @@ func (d *mysqlDriver) listColumnNodes(ctx context.Context, schema, table string)
 		if len(r) > 1 && r[1] != "" {
 			label = r[0] + " · " + r[1]
 		}
-		out = append(out, ObjectNode{Name: label, Kind: "column"})
+		n := ObjectNode{Name: label, Kind: "column"}
+		if len(r) > 2 && strings.EqualFold(r[2], "PRI") {
+			n.Badge = "PK"
+		}
+		out = append(out, n)
 	}
 	return out, nil
 }
@@ -304,7 +308,13 @@ func (d *mysqlDriver) listIndexNodes(ctx context.Context, schema, table string) 
 		if len(r) > 2 && r[2] != "" {
 			label = r[0] + " (" + r[2] + ")"
 		}
-		out = append(out, ObjectNode{Name: label, Kind: "index"})
+		n := ObjectNode{Name: label, Kind: "index"}
+		if strings.EqualFold(r[0], "PRIMARY") {
+			n.Badge = "PK"
+		} else if len(r) > 1 && (r[1] == "0" || strings.EqualFold(r[1], "false")) {
+			n.Badge = "UNI"
+		}
+		out = append(out, n)
 	}
 	return out, nil
 }

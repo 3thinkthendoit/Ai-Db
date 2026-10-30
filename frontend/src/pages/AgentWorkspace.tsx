@@ -21,6 +21,9 @@ const CHIP_KEYS: Record<string, string[]> = {
   perf: ['explain', 'slow', 'index_hint'],
 }
 
+/** Empty-session intro: a few starter asks (local copy, no LLM). */
+const INTRO_CHIP_KEYS = ['tables', 'describe', 'nl', 'explain', 'slow'] as const
+
 interface Props {
   taskId: string
   connectionId: string
@@ -61,6 +64,9 @@ export function AgentWorkspace(props: Props) {
   const inputEl = useRef<HTMLTextAreaElement>(null)
   const prevTaskId = useRef(props.taskId)
   const sendLock = useRef(false)
+  /** Last seedTick whose pending message was fully handled (sent or empty). */
+  const lastConsumedSeedRef = useRef(0)
+  const [, bumpSeedUi] = useState(0)
 
   async function reloadModels() {
     try {
@@ -86,6 +92,14 @@ export function AgentWorkspace(props: Props) {
       prompt: t(`chat.prompt.${key}`),
     })),
     [activeTab, t]
+  )
+  const introChips = useMemo(
+    () => INTRO_CHIP_KEYS.map((key) => ({
+      key,
+      label: t(`chat.chip.${key}`),
+      prompt: t(`chat.prompt.${key}`),
+    })),
+    [t]
   )
 
   useEffect(() => {
@@ -136,13 +150,26 @@ export function AgentWorkspace(props: Props) {
   }, [props.taskId])
 
   // Auto-send seeded message from Query → Agent 解释 (ref consume = StrictMode-safe).
+  // Suppress intro while seedTick is ahead of lastConsumed — avoids one-frame flash before busy.
   useEffect(() => {
-    if (!props.seedTick) return
+    if (!props.seedTick || props.seedTick <= lastConsumedSeedRef.current) return
     const msg = props.takePendingMessage?.()?.trim()
-    if (!msg) return
-    void send(msg)
+    if (!msg) {
+      // StrictMode remount may see empty after the first invoke already started send.
+      if (!sendLock.current) {
+        lastConsumedSeedRef.current = props.seedTick
+        bumpSeedUi((n) => n + 1)
+      }
+      return
+    }
+    void send(msg).finally(() => {
+      lastConsumedSeedRef.current = props.seedTick || lastConsumedSeedRef.current
+      bumpSeedUi((n) => n + 1)
+    })
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per seedTick
   }, [props.seedTick])
+
+  const seedInFlight = (props.seedTick || 0) > lastConsumedSeedRef.current
 
   function applyChip(prompt: string) {
     setDraft(prompt)
@@ -250,8 +277,43 @@ export function AgentWorkspace(props: Props) {
                 </button>
               </div>
             )}
-            {!hasHistory && !busy && (
-              <div className="session-empty muted">{t('chat.sessionEmpty')}</div>
+            {!hasHistory && !busy && !seedInFlight && (
+              <div className="agent-intro" role="status">
+                <div className="agent-intro-role">{t('chat.intro.role')}</div>
+                <h3 className="agent-intro-title">{t('chat.intro.title')}</h3>
+                <p className="agent-intro-lead">{t('chat.intro.lead')}</p>
+                <ul className="agent-intro-caps">
+                  <li>{t('chat.intro.cap.query')}</li>
+                  <li>{t('chat.intro.cap.schema')}</li>
+                  <li>{t('chat.intro.cap.sql')}</li>
+                  <li>{t('chat.intro.cap.write')}</li>
+                </ul>
+                {(props.connectionName || props.preferredSchema) && (
+                  <p className="agent-intro-ctx muted">
+                    {props.preferredSchema
+                      ? t('chat.intro.ctx', {
+                          conn: props.connectionName || t('agent.noConnection'),
+                          schema: props.preferredSchema,
+                        })
+                      : t('chat.intro.ctxConn', {
+                          conn: props.connectionName || t('agent.noConnection'),
+                        })}
+                  </p>
+                )}
+                <p className="agent-intro-hint muted">{t('chat.intro.hint')}</p>
+                <div className="agent-intro-chips">
+                  {introChips.map((c) => (
+                    <button
+                      key={c.key}
+                      type="button"
+                      className="chip"
+                      onClick={() => applyChip(c.prompt)}
+                    >
+                      {c.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
             )}
             {props.history.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>

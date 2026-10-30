@@ -112,6 +112,14 @@ function NodeRow({
           <span className="tree-name">
             {isFolder ? folderLabel(t, node.name) : node.name}
           </span>
+          {node.badge && (
+            <span
+              className={`tree-badge${node.badge === 'PK' ? ' pk' : ''}${node.badge === 'UNI' ? ' uni' : ''}`}
+              title={node.badge}
+            >
+              {node.badge}
+            </span>
+          )}
         </button>
       </div>
       {isOpen && err && (

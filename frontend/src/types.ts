@@ -44,6 +44,8 @@ export interface ObjectNode {
   name: string
   kind: string
   lazy?: boolean
+  /** Short UI tag from backend, e.g. "PK". */
+  badge?: string
   children?: ObjectNode[]
 }
 

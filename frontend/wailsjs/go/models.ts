@@ -225,6 +225,7 @@ export namespace db {
 	    name: string;
 	    kind: string;
 	    lazy?: boolean;
+	    badge?: string;
 	    children?: ObjectNode[];
 	
 	    static createFrom(source: any = {}) {
@@ -236,6 +237,7 @@ export namespace db {
 	        this.name = source["name"];
 	        this.kind = source["kind"];
 	        this.lazy = source["lazy"];
+	        this.badge = source["badge"];
 	        this.children = this.convertValues(source["children"], ObjectNode);
 	    }
 	

@@ -399,6 +399,32 @@ function App() {
             {(workSurface === 'sql' || !!activeTask) && (
               <header className="work-bar">
                 <div className="work-bar-left">
+                  {hideTaskSidebar && (
+                    <button
+                      type="button"
+                      className="work-home-btn"
+                      title={t('work.home.hint')}
+                      onClick={() => {
+                        setMode('work')
+                        setWorkSurface('agent')
+                        setActiveTaskId('')
+                        saveActiveTaskId('')
+                        setSchemaMenuOpen(false)
+                      }}
+                    >
+                      <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+                        <path
+                          d="M4 11.5 12 4l8 7.5 M7 10.5V20h10v-9.5"
+                          fill="none"
+                          stroke="currentColor"
+                          strokeWidth="1.7"
+                          strokeLinecap="round"
+                          strokeLinejoin="round"
+                        />
+                      </svg>
+                      <span>{t('work.home')}</span>
+                    </button>
+                  )}
                   <div
                     className={`work-bar-node${activeConn ? '' : ' muted'}`}
                     title={
@@ -473,34 +499,6 @@ function App() {
                       {t('work.view.sql')}
                     </button>
                   </div>
-                  {hideTaskSidebar && (
-                    <div className="work-bar-gear">
-                      <button
-                        type="button"
-                        className="work-home-btn"
-                        title={t('work.home.hint')}
-                        onClick={() => {
-                          setMode('work')
-                          setWorkSurface('agent')
-                          setActiveTaskId('')
-                          saveActiveTaskId('')
-                          setSchemaMenuOpen(false)
-                        }}
-                      >
-                        <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
-                          <path
-                            d="M4 11.5 12 4l8 7.5 M7 10.5V20h10v-9.5"
-                            fill="none"
-                            stroke="currentColor"
-                            strokeWidth="1.7"
-                            strokeLinecap="round"
-                            strokeLinejoin="round"
-                          />
-                        </svg>
-                        <span>{t('work.home')}</span>
-                      </button>
-                    </div>
-                  )}
                 </div>
               </header>
             )}

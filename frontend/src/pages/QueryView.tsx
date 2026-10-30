@@ -28,8 +28,11 @@ type CtxAction =
   | 'copyName'
   | 'addColumn'
   | 'modifyColumn'
+  | 'migrateColumnExpand'
+  | 'migrateTableCopy'
   | 'dropColumn'
   | 'createIndex'
+  | 'modifyIndex'
   | 'dropIndex'
   | 'import'
   | 'useSchema'
@@ -171,8 +174,13 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
         ? [{ action: 'createSequence', labelKey: 'query.ctx.createSequence' }, { sep: true }, copy]
         : [copy]
     case 'folder:columns':
-    case 'folder:indexes':
       return [copy]
+    case 'folder:indexes':
+      return [
+        { action: 'createIndex', labelKey: 'query.ctx.createIndex' },
+        { sep: true },
+        copy,
+      ]
     case 'table':
       return [
         { action: 'select', labelKey: 'query.ctx.select' },
@@ -182,6 +190,8 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
         { sep: true },
         { action: 'addColumn', labelKey: 'query.ctx.addColumn' },
         { action: 'modifyColumn', labelKey: 'query.ctx.modifyColumn' },
+        { action: 'migrateColumnExpand', labelKey: 'query.ctx.migrateColumnExpand' },
+        { action: 'migrateTableCopy', labelKey: 'query.ctx.migrateTableCopy' },
         { action: 'dropColumn', labelKey: 'query.ctx.dropColumn' },
         { sep: true },
         { action: 'createIndex', labelKey: 'query.ctx.createIndex' },
@@ -243,6 +253,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       ]
     case 'index':
       return [
+        { action: 'modifyIndex', labelKey: 'query.ctx.modifyIndex' },
         { action: 'dropIndex', labelKey: 'query.ctx.dropIndex' },
         { sep: true },
         copy,
@@ -250,6 +261,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
     case 'column':
       return [
         { action: 'modifyColumn', labelKey: 'query.ctx.modifyColumn' },
+        { action: 'migrateColumnExpand', labelKey: 'query.ctx.migrateColumnExpand' },
         { action: 'dropColumn', labelKey: 'query.ctx.dropColumn' },
         { sep: true },
         copy,
@@ -625,15 +637,138 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         const table = node.kind === 'column' ? (path[2] || '') : node.name
         const col = node.kind === 'column' ? colName : 'col_name'
         const ref = tableRef(connType, schema, table)
+        const curType =
+          node.kind === 'column' && node.name.includes(' · ')
+            ? node.name.split(' · ').slice(1).join(' · ').trim()
+            : ''
+        // Target type must be edited — never default to current type (avoids no-op DDL).
+        const newType = connType === 'postgres' ? 'bigint' : 'BIGINT'
+        const newBase = newType.split('(')[0].trim()
+        const colHint = `-- ${t('query.ctx.modifyColumnHint')}`
+        const curNote = curType ? `-- ${t('query.ctx.modifyColumnCurrent', { type: curType })}\n` : ''
         if (connType === 'postgres') {
           return {
             mode: 'fill',
             sql:
-              `${hint}\nALTER TABLE ${ref} ALTER COLUMN ${qi(col)} TYPE VARCHAR(128);\n` +
-              `-- ALTER TABLE ${ref} RENAME COLUMN ${qi(col)} TO ${qi('new_name')};`,
+              `${colHint}\n` +
+              curNote +
+              `-- ${t('query.ctx.modifyColumnEditType')}\n` +
+              `-- ${t('query.ctx.modifyColumnCheck')}\n` +
+              `-- SELECT COUNT(*) FROM ${ref} WHERE ${qi(col)} IS NOT NULL AND ${qi(col)}::text !~ '^[0-9]+$';\n` +
+              `ALTER TABLE ${ref}\n` +
+              `  ALTER COLUMN ${qi(col)} TYPE ${newType} USING ${qi(col)}::${newBase};`,
           }
         }
-        return { mode: 'fill', sql: `${hint}\nALTER TABLE ${ref} MODIFY COLUMN ${qi(col)} VARCHAR(128) NULL;` }
+        return {
+          mode: 'fill',
+          sql:
+            `${colHint}\n` +
+            curNote +
+            `-- ${t('query.ctx.modifyColumnEditType')}\n` +
+            `-- ${t('query.ctx.modifyColumnCheck')}\n` +
+            `-- SELECT COUNT(*) FROM ${ref} WHERE ${qi(col)} IS NOT NULL AND ${qi(col)} NOT REGEXP '^[0-9]+$';\n` +
+            `-- ${t('query.ctx.modifyColumnInplace')}\n` +
+            `ALTER TABLE ${ref}\n` +
+            `  MODIFY COLUMN ${qi(col)} ${newType} NULL;\n` +
+            `-- , ALGORITHM=INPLACE, LOCK=NONE  /* ${t('query.ctx.modifyColumnAlgo')} */`,
+        }
+      }
+      case 'migrateColumnExpand': {
+        const table = node.kind === 'column' ? (path[2] || '') : (node.kind === 'table' ? node.name : path[2] || '')
+        const col = node.kind === 'column' ? colName : 'col_name'
+        const ref = tableRef(connType, schema, table || 'table_name')
+        const curType =
+          node.kind === 'column' && node.name.includes(' · ')
+            ? node.name.split(' · ').slice(1).join(' · ').trim()
+            : ''
+        const newType = connType === 'postgres' ? 'bigint' : 'BIGINT'
+        const newBase = newType.split('(')[0].trim()
+        const neu = `${col}_new`
+        const oneByOne = `-- ${t('query.ctx.migrateRunOneByOne')}`
+        const head = `-- ${t('query.ctx.migrateColumnExpandHint')}`
+        const curNote = curType ? `-- ${t('query.ctx.modifyColumnCurrent', { type: curType })}\n` : ''
+        if (connType === 'postgres') {
+          return {
+            mode: 'fill',
+            sql:
+              `${head}\n${oneByOne}\n` +
+              curNote +
+              `-- ${t('query.ctx.modifyColumnEditType')}\n` +
+              `-- 1) ${t('query.ctx.migrateStepAdd')}\n` +
+              `ALTER TABLE ${ref} ADD COLUMN ${qi(neu)} ${newType};\n` +
+              `\n-- 2) ${t('query.ctx.migrateStepBackfill')}\n` +
+              `UPDATE ${ref} SET ${qi(neu)} = ${qi(col)}::${newBase} WHERE ${qi(neu)} IS NULL /* AND id > ? LIMIT 1000 */;\n` +
+              `\n-- 3) ${t('query.ctx.migrateStepCutover')}\n` +
+              `\n-- 4) ${t('query.ctx.migrateStepSwap')}\n` +
+              `ALTER TABLE ${ref} DROP COLUMN ${qi(col)};\n` +
+              `ALTER TABLE ${ref} RENAME COLUMN ${qi(neu)} TO ${qi(col)};`,
+          }
+        }
+        return {
+          mode: 'fill',
+          sql:
+            `${head}\n${oneByOne}\n` +
+            curNote +
+            `-- ${t('query.ctx.modifyColumnEditType')}\n` +
+            `-- 1) ${t('query.ctx.migrateStepAdd')}\n` +
+            `ALTER TABLE ${ref} ADD COLUMN ${qi(neu)} ${newType} NULL;\n` +
+            `\n-- 2) ${t('query.ctx.migrateStepBackfill')}\n` +
+            `UPDATE ${ref} SET ${qi(neu)} = CAST(${qi(col)} AS ${newBase}) WHERE ${qi(neu)} IS NULL /* AND id > ? LIMIT 1000 */;\n` +
+            `\n-- 3) ${t('query.ctx.migrateStepCutover')}\n` +
+            `\n-- 4) ${t('query.ctx.migrateStepSwap')} (${t('query.ctx.migrateMysql8Rename')})\n` +
+            `ALTER TABLE ${ref} DROP COLUMN ${qi(col)};\n` +
+            `ALTER TABLE ${ref} RENAME COLUMN ${qi(neu)} TO ${qi(col)};`,
+        }
+      }
+      case 'migrateTableCopy': {
+        const table = node.kind === 'table' ? node.name : (path[2] || 'table_name')
+        const ref = tableRef(connType, schema, table)
+        const neuName = `${table}_new`
+        const oldName = `${table}_old`
+        const neu = tableRef(connType, schema, neuName)
+        const old = tableRef(connType, schema, oldName)
+        const head = `-- ${t('query.ctx.migrateTableCopyHint')}`
+        const oneByOne = `-- ${t('query.ctx.migrateRunOneByOne')}`
+        const noSwap = `-- !!! ${t('query.ctx.migrateStepCopyNoSwap')} !!!`
+        if (connType === 'postgres') {
+          return {
+            mode: 'fill',
+            sql:
+              `${head}\n${oneByOne}\n` +
+              `-- 1) ${t('query.ctx.migrateStepCopyCreate')}\n` +
+              `CREATE TABLE ${neu} (LIKE ${ref} INCLUDING ALL);\n` +
+              `\n-- 2) ${t('query.ctx.migrateStepCopyAlter')}\n` +
+              `-- ALTER TABLE ${neu} ALTER COLUMN ${qi('col_name')} TYPE bigint USING ${qi('col_name')}::bigint;\n` +
+              `\n-- 3) ${t('query.ctx.migrateStepCopyData')}\n` +
+              `INSERT INTO ${neu} SELECT * FROM ${ref} /* WHERE id > ? ORDER BY id LIMIT 1000 */;\n` +
+              `\n-- ${t('query.ctx.migrateStepCopyCatchup')}\n` +
+              `${noSwap}\n` +
+              `\n-- 4) ${t('query.ctx.migrateStepCopySwap')}\n` +
+              `BEGIN;\n` +
+              `ALTER TABLE ${ref} RENAME TO ${qi(oldName)};\n` +
+              `ALTER TABLE ${neu} RENAME TO ${qi(table)};\n` +
+              `COMMIT;\n` +
+              `\n-- 5) ${t('query.ctx.migrateStepCopyDrop')}\n` +
+              `-- DROP TABLE ${old};`,
+          }
+        }
+        return {
+          mode: 'fill',
+          sql:
+            `${head}\n${oneByOne}\n` +
+            `-- 1) ${t('query.ctx.migrateStepCopyCreate')}\n` +
+            `CREATE TABLE ${neu} LIKE ${ref};\n` +
+            `\n-- 2) ${t('query.ctx.migrateStepCopyAlter')}\n` +
+            `-- ALTER TABLE ${neu} MODIFY COLUMN ${qi('col_name')} BIGINT NULL;\n` +
+            `\n-- 3) ${t('query.ctx.migrateStepCopyData')}\n` +
+            `INSERT INTO ${neu} SELECT * FROM ${ref} /* WHERE id > ? ORDER BY id LIMIT 1000 */;\n` +
+            `\n-- ${t('query.ctx.migrateStepCopyCatchup')}\n` +
+            `${noSwap}\n` +
+            `\n-- 4) ${t('query.ctx.migrateStepCopySwap')}\n` +
+            `RENAME TABLE ${ref} TO ${old}, ${neu} TO ${ref};\n` +
+            `\n-- 5) ${t('query.ctx.migrateStepCopyDrop')}\n` +
+            `-- DROP TABLE ${old};`,
+        }
       }
       case 'dropColumn': {
         const table = node.kind === 'column' ? (path[2] || '') : node.name
@@ -641,8 +776,52 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         return { mode: 'fill', sql: `${hint}\nALTER TABLE ${tableRef(connType, schema, table)} DROP COLUMN ${qi(col)};` }
       }
       case 'createIndex': {
-        const ref = tableRef(connType, schema, node.kind === 'table' ? node.name : (path[2] || node.name))
+        const table = node.kind === 'folder' ? (path[2] || '') : (node.kind === 'table' ? node.name : (path[2] || node.name))
+        const ref = tableRef(connType, schema, table)
         return { mode: 'fill', sql: `${hint}\nCREATE INDEX ${qi('idx_name')} ON ${ref} (${qi('col_name')});` }
+      }
+      case 'modifyIndex': {
+        // Cannot ALTER index columns in place. Prefer create-temp → drop-old → rename
+        // so the table is never without a covering index (same name cannot coexist).
+        const table = path[2] || ''
+        const ref = tableRef(connType, schema, table)
+        const m = node.name.match(/^(.*?)\s*\((.*)\)\s*$/)
+        const idx = (m ? m[1] : indexName).trim() || 'idx_name'
+        const rawCols = (m ? m[2] : 'col_name').split(',').map((c) => c.trim()).filter(Boolean)
+        const colsSql = (rawCols.length ? rawCols : ['col_name']).map((c) => qi(c)).join(', ')
+        const unique = node.badge === 'UNI'
+        const recreateHint = `-- ${t('query.ctx.modifyIndexHint')}`
+        const oneByOne = `-- ${t('query.ctx.migrateRunOneByOne')}`
+        if (idx.toUpperCase() === 'PRIMARY') {
+          // Only one PRIMARY KEY is allowed — must drop then add (brief gap unavoidable).
+          return {
+            mode: 'fill',
+            sql:
+              `${recreateHint}\n${oneByOne}\n` +
+              `ALTER TABLE ${ref} DROP PRIMARY KEY, ADD PRIMARY KEY (${colsSql});`,
+          }
+        }
+        const tmp = `${idx}_tmp`
+        if (connType === 'postgres') {
+          const qOld = schema ? `${qi(schema)}.${qi(idx)}` : qi(idx)
+          const qTmp = schema ? `${qi(schema)}.${qi(tmp)}` : qi(tmp)
+          return {
+            mode: 'fill',
+            sql:
+              `${recreateHint}\n${oneByOne}\n` +
+              `CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${qi(tmp)} ON ${ref} (${colsSql});\n` +
+              `\nDROP INDEX IF EXISTS ${qOld};\n` +
+              `\nALTER INDEX ${qTmp} RENAME TO ${qi(idx)};`,
+          }
+        }
+        return {
+          mode: 'fill',
+          sql:
+            `${recreateHint}\n${oneByOne}\n` +
+            `CREATE ${unique ? 'UNIQUE ' : ''}INDEX ${qi(tmp)} ON ${ref} (${colsSql});\n` +
+            `\nDROP INDEX ${qi(idx)} ON ${ref};\n` +
+            `\nALTER TABLE ${ref} RENAME INDEX ${qi(tmp)} TO ${qi(idx)};`,
+        }
       }
       case 'dropIndex': {
         if (node.kind === 'index') {
