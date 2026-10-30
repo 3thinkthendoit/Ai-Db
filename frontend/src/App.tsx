@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import logoSrc from './assets/logo.svg'
 import { ConnectionForm } from './components/ConnectionForm'
@@ -44,9 +44,21 @@ function App() {
   const [editing, setEditing] = useState<Connection | null | undefined>(undefined)
   const [banner, setBanner] = useState('')
   const [tasks, setTasks] = useState<Task[]>(() => loadTasks())
-  const [activeTaskId, setActiveTaskId] = useState(() => loadActiveTaskId())
+  const [activeTaskId, setActiveTaskId] = useState(() => {
+    const id = loadActiveTaskId()
+    if (!id) return ''
+    const list = loadTasks()
+    if (list.some((t) => t.id === id)) return id
+    saveActiveTaskId('')
+    return ''
+  })
   const [showNewTask, setShowNewTask] = useState(false)
   const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>('agent')
+  const [activeSchema, setActiveSchema] = useState('')
+  const [agentSeedTick, setAgentSeedTick] = useState(0)
+  const agentPendingRef = useRef('')
+  const [dbMenuOpen, setDbMenuOpen] = useState(false)
+  const dbMenuRoot = useRef<HTMLDivElement>(null)
 
   const persistTasks = useCallback((next: Task[]) => {
     setTasks(next)
@@ -83,10 +95,28 @@ function App() {
     void reload().catch((e) => setBanner(String(e)))
   }, [reload])
 
+  useEffect(() => {
+    function onDoc(e: MouseEvent) {
+      if (dbMenuRoot.current && !dbMenuRoot.current.contains(e.target as Node)) {
+        setDbMenuOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', onDoc)
+    return () => document.removeEventListener('mousedown', onDoc)
+  }, [])
+
   const activeTask = useMemo(
     () => tasks.find((x) => x.id === activeTaskId) || null,
     [tasks, activeTaskId]
   )
+
+  // 任务列表被清理后，丢掉孤儿 activeTaskId，避免空白「对话模式」。
+  useEffect(() => {
+    if (activeTaskId && !activeTask) {
+      setActiveTaskId('')
+      saveActiveTaskId('')
+    }
+  }, [activeTask, activeTaskId])
 
   const workConnId = activeTask?.connectionId || activeConnId
 
@@ -218,101 +248,194 @@ function App() {
 
   const workspaceHistory = activeTask?.messages || []
 
+  // SQL 查询占满主区：隐藏任务侧栏（新建任务 / 会话列表 / 设置入口）。
+  const hideTaskSidebar = mode === 'work' && workSurface === 'sql'
+
   return (
-    <div className="layout">
-      <aside className="sidebar">
-        <div className="brand">
-          <img className="brand-mark" src={logoSrc} alt="AI-DB" />
-          <div>
-            <div className="brand-title">AI-DB</div>
-            <div className="brand-sub">{t('app.brand.sub')}</div>
+    <div className={`layout${hideTaskSidebar ? ' sql-focus' : ''}`}>
+      {!hideTaskSidebar && (
+        <aside className="sidebar">
+          <div className="brand">
+            <img className="brand-mark" src={logoSrc} alt="AI-DB" />
+            <div>
+              <div className="brand-title">AI-DB</div>
+              <div className="brand-sub">{t('app.brand.sub')}</div>
+            </div>
           </div>
-        </div>
 
-        <nav className="sidebar-nav">
-          <button
-            type="button"
-            className={`nav-btn${showNewTask ? ' active' : ''}`}
-            onClick={() => {
-              setMode('work')
-              setWorkSurface('agent')
-              setShowNewTask(true)
-            }}
-          >
-            <svg className="nav-icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
-              <path d={NEW_TASK_ICON} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-            </svg>
-            {t('app.nav.newTask')}
-          </button>
-        </nav>
+          <nav className="sidebar-nav">
+            <button
+              type="button"
+              className={`nav-btn${showNewTask ? ' active' : ''}`}
+              onClick={() => {
+                setMode('work')
+                setWorkSurface('agent')
+                setShowNewTask(true)
+              }}
+            >
+              <svg className="nav-icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+                <path d={NEW_TASK_ICON} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              {t('app.nav.newTask')}
+            </button>
+          </nav>
 
-        <div className="ssb-wrap">
-          <TasksSidebar
-            tasks={tasks}
-            connections={connections}
-            activeTaskId={activeTaskId}
-            onOpen={(id) => selectTask(id)}
-            onRename={(id, name) => {
-              persistTasks(tasks.map((task) => (task.id === id ? touchTask(task, { name }) : task)))
-            }}
-            onDelete={(id) => {
-              const next = tasks.filter((task) => task.id !== id)
-              persistTasks(next)
-              if (activeTaskId === id) {
-                setActiveTaskId('')
-                saveActiveTaskId('')
-              }
-            }}
-          />
-        </div>
+          <div className="ssb-wrap">
+            <TasksSidebar
+              tasks={tasks}
+              connections={connections}
+              activeTaskId={activeTaskId}
+              onOpen={(id) => selectTask(id)}
+              onRename={(id, name) => {
+                persistTasks(tasks.map((task) => (task.id === id ? touchTask(task, { name }) : task)))
+              }}
+              onDelete={(id) => {
+                const next = tasks.filter((task) => task.id !== id)
+                persistTasks(next)
+                if (activeTaskId === id) {
+                  setActiveTaskId('')
+                  saveActiveTaskId('')
+                }
+              }}
+            />
+          </div>
 
-        <div className="posture">
-          <SettingsMenu activePage={menuActivePage} onPage={openWorkPage} />
-        </div>
-      </aside>
+          <div className="posture">
+            <SettingsMenu activePage={menuActivePage} onPage={openWorkPage} />
+          </div>
+        </aside>
+      )}
 
       <main className="main">
         {banner && <div className="banner" onClick={() => setBanner('')}>{banner}</div>}
 
-        {mode === 'work' && (
-          <div className="work-surface">
-            {/* 对齐 Ai-Shell：空欢迎首页不露顶栏；有对话或切到 SQL 才显示 Agent/SQL 切换 */}
-            {(workSurface === 'sql' || workspaceHistory.length > 0) && (
+        {/* Keep workbench mounted across Settings/Connections/Prefs so Query tabs survive. */}
+        <div className={`work-surface${mode === 'work' ? '' : ' is-hidden'}`} aria-hidden={mode !== 'work'}>
+            {/* 对齐 Ai-Shell：无任务的欢迎首页不露顶栏；点进有效任务或 SQL 显示工作栏 */}
+            {(workSurface === 'sql' || !!activeTask) && (
               <header className="work-bar">
                 <div className="work-bar-left">
-                  {activeConn ? (
-                    <span
-                      className="work-bar-host"
-                      title={`${activeConn.name} · ${activeConn.type} · ${activeConn.host}:${activeConn.port}`}
+                  <div className="host-menu-wrap work-bar-db" ref={dbMenuRoot}>
+                    <button
+                      type="button"
+                      className={`tool-pill meta-btn work-db-btn${dbMenuOpen ? ' open' : ''}`}
+                      title={
+                        activeConn
+                          ? `${activeConn.name} · ${activeConn.type} · ${activeConn.host}:${activeConn.port}`
+                          : t('work.db.pick')
+                      }
+                      onClick={() => {
+                        if (connections.length === 0) {
+                          setMode('connections')
+                          return
+                        }
+                        setDbMenuOpen((v) => !v)
+                      }}
                     >
-                      {activeConn.name}
-                      {' · '}
-                      {activeConn.host}:{activeConn.port}
-                    </span>
-                  ) : (
-                    <span className="work-bar-host muted">{t('app.noConnection')}</span>
+                      <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                        <ellipse cx="12" cy="6" rx="7" ry="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                        <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                        <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                      </svg>
+                      <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
+                      <span className="meta-label">
+                        {activeConn
+                          ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
+                          : t('work.db.pick')}
+                      </span>
+                      <span className="caret-down">{dbMenuOpen ? '▴' : '▾'}</span>
+                    </button>
+                    {dbMenuOpen && (
+                      <div className="host-menu" role="listbox">
+                        {connections.length === 0 ? (
+                          <button
+                            type="button"
+                            className="model-menu-item"
+                            onClick={() => {
+                              setDbMenuOpen(false)
+                              setMode('connections')
+                            }}
+                          >
+                            {t('work.db.empty')}
+                          </button>
+                        ) : (
+                          <>
+                            {connections.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={`model-menu-item${c.id === workConnId ? ' on' : ''}`}
+                                onClick={() => {
+                                  if (c.id === workConnId) {
+                                    setDbMenuOpen(false)
+                                    return
+                                  }
+                                  if (activeTask && activeTask.messages.length > 0) {
+                                    if (!window.confirm(t('work.db.switchConfirm'))) return
+                                  }
+                                  setDbMenuOpen(false)
+                                  setActiveConnId(c.id)
+                                  if (activeTask) {
+                                    persistTasks(tasks.map((task) =>
+                                      task.id === activeTask.id ? touchTask(task, { connectionId: c.id }) : task
+                                    ))
+                                  }
+                                  void handleConnect(c.id)
+                                }}
+                              >
+                                {c.name} · {c.type} · {c.host}:{c.port}
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              className="model-menu-item work-db-manage"
+                              onClick={() => {
+                                setDbMenuOpen(false)
+                                setMode('connections')
+                              }}
+                            >
+                              {t('work.db.manage')}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                  {workSurface === 'sql' && activeSchema && (
+                    <div className="work-bar-schema" title={t('work.schema.hint', { name: activeSchema })}>
+                      <span className="work-bar-schema-label">{t('work.schema')}</span>
+                      <strong className="work-bar-schema-name">{activeSchema}</strong>
+                    </div>
                   )}
                 </div>
-                <div className="seg" role="tablist" aria-label="Agent / SQL">
-                  <button
-                    type="button"
-                    className={workSurface === 'agent' ? 'on' : ''}
-                    onClick={() => setWorkSurface('agent')}
-                  >
-                    {t('work.view.agent')}
-                  </button>
-                  <button
-                    type="button"
-                    className={workSurface === 'sql' ? 'on' : ''}
-                    onClick={() => setWorkSurface('sql')}
-                  >
-                    {t('work.view.sql')}
-                  </button>
+                <div className="work-bar-right">
+                  <div className="seg" role="tablist" aria-label="Agent / Query">
+                    <button
+                      type="button"
+                      className={workSurface === 'agent' ? 'on' : ''}
+                      onClick={() => setWorkSurface('agent')}
+                    >
+                      {t('work.view.agent')}
+                    </button>
+                    <button
+                      type="button"
+                      className={workSurface === 'sql' ? 'on' : ''}
+                      onClick={() => setWorkSurface('sql')}
+                    >
+                      {t('work.view.sql')}
+                    </button>
+                  </div>
+                  {hideTaskSidebar && (
+                    <div className="work-bar-gear">
+                      <SettingsMenu activePage={menuActivePage} onPage={openWorkPage} />
+                    </div>
+                  )}
                 </div>
               </header>
             )}
             <div className="work-surface-body">
-              {workSurface === 'agent' ? (
+              {/* Keep both mounted so Agent↔Query switch does not wipe editor/result tabs. */}
+              <div className={`work-surface-panel${workSurface === 'agent' ? '' : ' is-hidden'}`}>
                 <AgentWorkspace
                   taskId={activeTaskId}
                   connectionId={workConnId}
@@ -321,6 +444,12 @@ function App() {
                   connectionName={activeConn?.name || ''}
                   taskName={activeTask?.name || ''}
                   history={workspaceHistory}
+                  seedTick={agentSeedTick}
+                  takePendingMessage={() => {
+                    const msg = agentPendingRef.current
+                    agentPendingRef.current = ''
+                    return msg
+                  }}
                   onPickConnection={async (id) => {
                     setActiveConnId(id)
                     if (activeTask && activeTask.messages.length === 0) {
@@ -335,18 +464,26 @@ function App() {
                   onEnsureTask={ensureTask}
                   onHistoryChangeFor={updateTaskHistoryFor}
                 />
-              ) : (
+              </div>
+              <div className={`work-surface-panel${workSurface === 'sql' ? '' : ' is-hidden'}`}>
                 <QueryView
+                  active={mode === 'work' && workSurface === 'sql'}
                   connectionId={workConnId}
                   connected={!!workConnId && connectedIds.has(workConnId)}
                   connType={activeConn?.type || 'mysql'}
                   objects={objects}
                   onRefreshObjects={refreshObjects}
+                  onActiveSchemaChange={setActiveSchema}
+                  onAskAgent={(sql) => {
+                    agentPendingRef.current = t('query.agentExplainPrompt', { sql })
+                    setAgentSeedTick((n) => n + 1)
+                    setMode('work')
+                    setWorkSurface('agent')
+                  }}
                 />
-              )}
+              </div>
             </div>
           </div>
-        )}
         {mode === 'connections' && (
           <ConnectionsView
             connections={connections}

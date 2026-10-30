@@ -224,6 +224,7 @@ export namespace db {
 	export class ObjectNode {
 	    name: string;
 	    kind: string;
+	    lazy?: boolean;
 	    children?: ObjectNode[];
 	
 	    static createFrom(source: any = {}) {
@@ -234,6 +235,7 @@ export namespace db {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.name = source["name"];
 	        this.kind = source["kind"];
+	        this.lazy = source["lazy"];
 	        this.children = this.convertValues(source["children"], ObjectNode);
 	    }
 	

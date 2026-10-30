@@ -19,6 +19,8 @@ export function Disconnect(arg1:string):Promise<void>;
 
 export function ExecuteQuery(arg1:string,arg2:string):Promise<db.QueryResult>;
 
+export function ExpandObject(arg1:string,arg2:Array<string>):Promise<Array<db.ObjectNode>>;
+
 export function GetLLMConfig():Promise<config.LLMConfig>;
 
 export function IsMutatingQuery(arg1:string,arg2:string):Promise<boolean>;

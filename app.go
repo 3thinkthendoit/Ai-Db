@@ -207,7 +207,7 @@ func (a *App) Disconnect(id string) error {
 	return a.mgr.Disconnect(id)
 }
 
-// ListObjects returns schema/table or redis key browser nodes.
+// ListObjects returns top-level browser nodes (schemas / redis db); expand via ExpandObject.
 func (a *App) ListObjects(connectionID string) ([]db.ObjectNode, error) {
 	drv, release, err := a.mgr.Acquire(connectionID)
 	if err != nil {
@@ -215,6 +215,16 @@ func (a *App) ListObjects(connectionID string) ([]db.ObjectNode, error) {
 	}
 	defer release()
 	return drv.ListObjects(a.bgCtx())
+}
+
+// ExpandObject loads children for an object-tree path (schema → folders → tables/indexes…).
+func (a *App) ExpandObject(connectionID string, path []string) ([]db.ObjectNode, error) {
+	drv, release, err := a.mgr.Acquire(connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	return drv.ExpandObject(a.bgCtx(), path)
 }
 
 // ExecuteQuery runs SQL or a Redis command.
@@ -374,13 +384,13 @@ func (a *App) SaveLLMSafety(allowWrites bool, maxRows, maxAgentSteps int) error 
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	cfg := a.ensureCfgLocked()
-	cfg.LLM.AllowWrites = allowWrites
 	if maxRows <= 0 {
-		maxRows = config.DefaultLLM().MaxRows
+		return fmt.Errorf("maxRows must be >= 1")
 	}
 	if maxAgentSteps <= 0 {
-		maxAgentSteps = config.DefaultLLM().MaxAgentSteps
+		return fmt.Errorf("maxAgentSteps must be >= 1")
 	}
+	cfg.LLM.AllowWrites = allowWrites
 	cfg.LLM.MaxRows = maxRows
 	cfg.LLM.MaxAgentSteps = maxAgentSteps
 	return a.persistLocked()

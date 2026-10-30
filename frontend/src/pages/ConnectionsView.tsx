@@ -78,7 +78,7 @@ export function ConnectionsView(props: Props) {
           return (
             <div
               key={c.id}
-              className={`card conn-card${c.id === props.activeId ? ' on' : ''}`}
+              className={`card conn-card selectable${c.id === props.activeId ? ' on' : ''}`}
               onClick={() => props.onSelect(c.id)}
             >
               <div className="conn-card-main">

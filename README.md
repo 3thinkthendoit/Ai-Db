@@ -14,7 +14,7 @@ UI layout / theme / i18n follow the same patterns as Ai-Shell (left sidebar, lig
 - Sidebar **Query / Agent** switching (shared connection context)
 - **Preferences**: light/dark theme, Chinese / English
 - LLM settings: `baseUrl`, API key, model, max rows, max steps
-- Safety: writes disabled by default; enable in LLM Settings
+- Safety: writes disabled by default; enable under Preferences → Safety & limits
 
 ## Requirements
 

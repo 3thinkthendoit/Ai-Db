@@ -43,6 +43,7 @@ export interface QueryResult {
 export interface ObjectNode {
   name: string
   kind: string
+  lazy?: boolean
   children?: ObjectNode[]
 }
 

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { Connection } from '../types'
 import { Task } from '../tasks'
 import { useI18n } from '../i18n'
+import { BodyPortal } from '../lib/portal'
 
 interface Props {
   tasks: Task[]
@@ -146,82 +147,86 @@ export function TasksSidebar({ tasks, connections, activeTaskId, onOpen, onRenam
       )}
 
       {renaming && (
-        <div className="overlay">
-          <div className="modal" role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <h3>{t('ss.renameTitle')}</h3>
-              <button
-                type="button"
-                className="modal-close"
-                title={t('modal.close')}
-                aria-label={t('modal.close')}
-                onClick={() => setRenaming(null)}
-              >
-                ×
-              </button>
-            </div>
-            <input
-              ref={renameEl}
-              value={renaming.name}
-              placeholder={t('ss.namePh')}
-              onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  onRename(renaming.id, renaming.name.trim())
-                  setRenaming(null)
-                }
-              }}
-            />
-            <div className="modal-actions">
-              <button type="button" className="sm" onClick={() => setRenaming(null)}>{t('ss.cancel')}</button>
-              <button
-                type="button"
-                className="sm primary"
-                onClick={() => {
-                  onRename(renaming.id, renaming.name.trim())
-                  setRenaming(null)
+        <BodyPortal>
+          <div className="overlay">
+            <div className="modal" role="dialog" aria-modal="true">
+              <div className="modal-head">
+                <h3>{t('ss.renameTitle')}</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setRenaming(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <input
+                ref={renameEl}
+                value={renaming.name}
+                placeholder={t('ss.namePh')}
+                onChange={(e) => setRenaming({ ...renaming, name: e.target.value })}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter') {
+                    onRename(renaming.id, renaming.name.trim())
+                    setRenaming(null)
+                  }
                 }}
-              >
-                {t('ss.confirm')}
-              </button>
+              />
+              <div className="modal-actions">
+                <button type="button" className="sm" onClick={() => setRenaming(null)}>{t('ss.cancel')}</button>
+                <button
+                  type="button"
+                  className="sm primary"
+                  onClick={() => {
+                    onRename(renaming.id, renaming.name.trim())
+                    setRenaming(null)
+                  }}
+                >
+                  {t('ss.confirm')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       )}
 
       {deleting && (
-        <div className="overlay">
-          <div className="modal" role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <h3>{t('ss.deleteTitle')}</h3>
-              <button
-                type="button"
-                className="modal-close"
-                title={t('modal.close')}
-                aria-label={t('modal.close')}
-                onClick={() => setDeleting(null)}
-              >
-                ×
-              </button>
-            </div>
-            <p>
-              {t('ss.delete.p1')}<b>{label(deleting)}</b>{t('ss.delete.p2')}
-            </p>
-            <div className="modal-actions">
-              <button type="button" className="sm" onClick={() => setDeleting(null)}>{t('ss.cancel')}</button>
-              <button
-                type="button"
-                className="sm danger"
-                onClick={() => {
-                  onDelete(deleting.id)
-                  setDeleting(null)
-                }}
-              >
-                {t('ss.deleteBtn')}
-              </button>
+        <BodyPortal>
+          <div className="overlay">
+            <div className="modal" role="dialog" aria-modal="true">
+              <div className="modal-head">
+                <h3>{t('ss.deleteTitle')}</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setDeleting(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <p>
+                {t('ss.delete.p1')}<b>{label(deleting)}</b>{t('ss.delete.p2')}
+              </p>
+              <div className="modal-actions">
+                <button type="button" className="sm" onClick={() => setDeleting(null)}>{t('ss.cancel')}</button>
+                <button
+                  type="button"
+                  className="sm danger"
+                  onClick={() => {
+                    onDelete(deleting.id)
+                    setDeleting(null)
+                  }}
+                >
+                  {t('ss.deleteBtn')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       )}
     </div>
   )

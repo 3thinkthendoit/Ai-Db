@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import { Connection, ConnType, emptyConnection } from '../types'
 import { useI18n } from '../i18n'
+import { BodyPortal } from '../lib/portal'
 
 interface Props {
   initial: Connection | null
@@ -62,6 +63,7 @@ export function ConnectionForm({ initial, onSave, onTest, onClose }: Props) {
     : undefined
 
   return (
+    <BodyPortal>
     <div className="modal-backdrop">
       <div className="modal" role="dialog" aria-modal="true">
         <div className="modal-head">
@@ -114,5 +116,6 @@ export function ConnectionForm({ initial, onSave, onTest, onClose }: Props) {
         </div>
       </div>
     </div>
+    </BodyPortal>
   )
 }

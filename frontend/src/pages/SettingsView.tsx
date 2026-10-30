@@ -1,13 +1,13 @@
 import { useCallback, useEffect, useState } from 'react'
-import { LLMConfig, LLMProfileView } from '../types'
+import { LLMProfileView } from '../types'
 import { useI18n } from '../i18n'
+import { useTipToast } from '../components/TipToast'
+import { BodyPortal } from '../lib/portal'
 import {
   ActivateLLMProfile,
   DeleteLLMProfile,
-  GetLLMConfig,
   ListLLMProfiles,
   SaveLLMProfile,
-  SaveLLMSafety,
   TestLLMProfile,
 } from '../../wailsjs/go/main/App'
 
@@ -36,13 +36,11 @@ function displayProfileName(name: string, t: (k: string) => string) {
 
 export function SettingsView() {
   const { t } = useI18n()
+  const { showTip, tipNode } = useTipToast()
   const [profiles, setProfiles] = useState<LLMProfileView[]>([])
-  const [safety, setSafety] = useState({ allowWrites: false, maxRows: 500, maxAgentSteps: 12 })
   const [editing, setEditing] = useState(false)
   const [form, setForm] = useState<FormState>(emptyForm)
   const [profileBusy, setProfileBusy] = useState(false)
-  const [safetyBusy, setSafetyBusy] = useState(false)
-  const [pageMsg, setPageMsg] = useState('')
   const [modalErr, setModalErr] = useState('')
   const [cardTesting, setCardTesting] = useState<Record<string, boolean>>({})
   const [cardResult, setCardResult] = useState<Record<string, { ok: boolean; message: string }>>({})
@@ -51,21 +49,13 @@ export function SettingsView() {
   const [deleting, setDeleting] = useState<LLMProfileView | null>(null)
 
   const reload = useCallback(async () => {
-    const [list, cfg] = await Promise.all([
-      ListLLMProfiles() as Promise<LLMProfileView[]>,
-      GetLLMConfig() as Promise<LLMConfig>,
-    ])
+    const list = (await ListLLMProfiles()) as LLMProfileView[]
     setProfiles(list || [])
-    setSafety({
-      allowWrites: !!cfg.allowWrites,
-      maxRows: cfg.maxRows || 500,
-      maxAgentSteps: cfg.maxAgentSteps || 12,
-    })
   }, [])
 
   useEffect(() => {
-    void reload().catch((e) => setPageMsg(String(e)))
-  }, [reload])
+    void reload().catch((e) => showTip(String(e), 'err'))
+  }, [reload, showTip])
 
   function startNew() {
     setForm(emptyForm())
@@ -97,7 +87,6 @@ export function SettingsView() {
   async function saveProfile() {
     setProfileBusy(true)
     setModalErr('')
-    setPageMsg('')
     try {
       await SaveLLMProfile({
         id: form.id,
@@ -109,7 +98,7 @@ export function SettingsView() {
       } as any)
       setEditing(false)
       await reload()
-      setPageMsg(t('settings.saved'))
+      showTip(t('settings.saved'))
     } catch (e: any) {
       setModalErr(String(e?.message || e))
     } finally {
@@ -119,13 +108,12 @@ export function SettingsView() {
 
   async function activate(p: LLMProfileView) {
     setProfileBusy(true)
-    setPageMsg('')
     try {
       await ActivateLLMProfile(p.id)
       await reload()
-      setPageMsg(t('settings.switched', { name: displayProfileName(p.name, t) }))
+      showTip(t('settings.switched', { name: displayProfileName(p.name, t) }))
     } catch (e: any) {
-      setPageMsg(String(e?.message || e))
+      showTip(String(e?.message || e), 'err')
     } finally {
       setProfileBusy(false)
     }
@@ -135,14 +123,13 @@ export function SettingsView() {
     if (!deleting) return
     const p = deleting
     setProfileBusy(true)
-    setPageMsg('')
     try {
       await DeleteLLMProfile(p.id)
       setDeleting(null)
       await reload()
-      setPageMsg(t('settings.removed'))
+      showTip(t('settings.removed'))
     } catch (e: any) {
-      setPageMsg(String(e?.message || e))
+      showTip(String(e?.message || e), 'err')
     } finally {
       setProfileBusy(false)
     }
@@ -185,20 +172,6 @@ export function SettingsView() {
       setModalTest({ ok: false, message: String(e?.message || e) })
     } finally {
       setModalTesting(false)
-    }
-  }
-
-  async function saveSafety() {
-    setSafetyBusy(true)
-    setPageMsg('')
-    try {
-      await SaveLLMSafety(safety.allowWrites, safety.maxRows, safety.maxAgentSteps)
-      await reload()
-      setPageMsg(t('settings.saved'))
-    } catch (e: any) {
-      setPageMsg(String(e?.message || e))
-    } finally {
-      setSafetyBusy(false)
     }
   }
 
@@ -250,169 +223,142 @@ export function SettingsView() {
                   </button>
                 )}
                 <button type="button" className="sm" onClick={() => startEdit(p)}>{t('settings.edit')}</button>
-                {profiles.length > 1 && (
-                  <button type="button" className="sm danger" disabled={profileBusy} onClick={() => setDeleting(p)}>
-                    {t('settings.delete')}
-                  </button>
-                )}
+                <button
+                  type="button"
+                  className="sm danger"
+                  disabled={profileBusy || profiles.length <= 1}
+                  title={profiles.length <= 1 ? t('settings.delete.last') : t('settings.delete')}
+                  onClick={() => {
+                    if (profiles.length <= 1) {
+                      showTip(t('settings.delete.last'), 'err')
+                      return
+                    }
+                    setDeleting(p)
+                  }}
+                >
+                  {t('settings.delete')}
+                </button>
               </div>
             </div>
           )
         })}
       </div>
 
-      <section className="block settings-safety">
-        <div className="block-label">{t('settings.safety')}</div>
-        <div className="stack">
-          <div className="field">
-            <div className="field-meta">
-              <div className="field-title">{t('settings.maxRows')}</div>
-            </div>
-            <input
-              style={{ width: 120 }}
-              type="number"
-              value={safety.maxRows}
-              onChange={(e) => setSafety({ ...safety, maxRows: Number(e.target.value) })}
-            />
-          </div>
-          <div className="field">
-            <div className="field-meta">
-              <div className="field-title">{t('settings.maxSteps')}</div>
-            </div>
-            <input
-              style={{ width: 120 }}
-              type="number"
-              value={safety.maxAgentSteps}
-              onChange={(e) => setSafety({ ...safety, maxAgentSteps: Number(e.target.value) })}
-            />
-          </div>
-          <div className="field">
-            <label className="checkbox-row">
-              <input
-                type="checkbox"
-                checked={safety.allowWrites}
-                onChange={(e) => setSafety({ ...safety, allowWrites: e.target.checked })}
-              />
-              {t('settings.allowWrites')}
-            </label>
-          </div>
-        </div>
-        <button type="button" className="primary" style={{ marginTop: 14 }} disabled={safetyBusy} onClick={() => void saveSafety()}>
-          {t('settings.saveSafety')}
-        </button>
-      </section>
-
-      {pageMsg && <p className="form-msg">{pageMsg}</p>}
+      {tipNode}
 
       {deleting && (
-        <div className="overlay">
-          <div className="modal" role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <h3>{t('settings.deleteTitle')}</h3>
-              <button
-                type="button"
-                className="modal-close"
-                disabled={profileBusy}
-                title={t('modal.close')}
-                aria-label={t('modal.close')}
-                onClick={() => setDeleting(null)}
-              >
-                ×
-              </button>
-            </div>
-            <p>
-              {t('settings.confirmDelete', { name: displayProfileName(deleting.name, t) })}
-            </p>
-            <div className="modal-actions">
-              <button type="button" className="sm" disabled={profileBusy} onClick={() => setDeleting(null)}>
-                {t('settings.cancel')}
-              </button>
-              <button type="button" className="sm danger" disabled={profileBusy} onClick={() => void confirmDelete()}>
-                {t('settings.delete')}
-              </button>
+        <BodyPortal>
+          <div className="overlay">
+            <div className="modal" role="dialog" aria-modal="true">
+              <div className="modal-head">
+                <h3>{t('settings.deleteTitle')}</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={profileBusy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setDeleting(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <p>
+                {t('settings.confirmDelete', { name: displayProfileName(deleting.name, t) })}
+              </p>
+              <div className="modal-actions">
+                <button type="button" className="sm" disabled={profileBusy} onClick={() => setDeleting(null)}>
+                  {t('settings.cancel')}
+                </button>
+                <button type="button" className="sm danger" disabled={profileBusy} onClick={() => void confirmDelete()}>
+                  {t('settings.delete')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       )}
 
       {editing && (
-        <div className="modal-backdrop">
-          <div className="modal" role="dialog" aria-modal="true">
-            <div className="modal-head">
-              <h2>{form.id ? t('settings.editTitle') : t('settings.addTitle')}</h2>
-              <button
-                type="button"
-                className="modal-close"
-                disabled={profileBusy}
-                title={t('modal.close')}
-                aria-label={t('modal.close')}
-                onClick={closeModal}
-              >
-                ×
-              </button>
-            </div>
-            <label>
-              {t('settings.info.name')}
-              <input
-                value={form.name}
-                placeholder={t('settings.info.namePh')}
-                onChange={(e) => setForm({ ...form, name: e.target.value })}
-              />
-            </label>
-            <label>
-              {t('settings.baseUrl')}
-              <input
-                value={form.baseUrl}
-                placeholder="https://api.openai.com/v1"
-                onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
-              />
-            </label>
-            <label>
-              {t('settings.model')}
-              <input
-                value={form.model}
-                placeholder="gpt-4o-mini"
-                onChange={(e) => setForm({ ...form, model: e.target.value })}
-              />
-            </label>
-            <label>
-              {t('settings.apiKey')}
-              {form.id && editingHasKey ? (
-                <span className="muted"> {t('settings.key.saved')}</span>
-              ) : null}
-              <input
-                type="password"
-                value={form.apiKey}
-                placeholder={form.id && editingHasKey ? t('settings.apiKey.ph') : 'sk-...'}
-                onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
-              />
-            </label>
-            {form.id && editingHasKey && (
-              <label className="checkbox-row">
+        <BodyPortal>
+          <div className="modal-backdrop">
+            <div className="modal" role="dialog" aria-modal="true">
+              <div className="modal-head">
+                <h2>{form.id ? t('settings.editTitle') : t('settings.addTitle')}</h2>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={profileBusy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={closeModal}
+                >
+                  ×
+                </button>
+              </div>
+              <label>
+                {t('settings.info.name')}
                 <input
-                  type="checkbox"
-                  checked={form.clearKey}
-                  onChange={(e) => setForm({ ...form, clearKey: e.target.checked })}
+                  value={form.name}
+                  placeholder={t('settings.info.namePh')}
+                  onChange={(e) => setForm({ ...form, name: e.target.value })}
                 />
-                {t('settings.key.clear')}
               </label>
-            )}
-            <p className="muted" style={{ margin: 0, fontSize: 12, lineHeight: 1.6 }}>{t('settings.notice')}</p>
-            {modalTest && (
-              <div className={`conn-card-test${modalTest.ok ? ' ok' : ' bad'}`}>{modalTest.message}</div>
-            )}
-            {modalErr && <div className="error-text">{modalErr}</div>}
-            <div className="modal-actions">
-              <button type="button" disabled={profileBusy} onClick={closeModal}>{t('settings.cancel')}</button>
-              <button type="button" disabled={modalTesting} onClick={() => void testModal()}>
-                {modalTesting ? t('settings.test.testing') : t('settings.test.run')}
-              </button>
-              <button type="button" className="primary" disabled={profileBusy} onClick={() => void saveProfile()}>
-                {profileBusy ? t('settings.saving') : t('settings.save')}
-              </button>
+              <label>
+                {t('settings.baseUrl')}
+                <input
+                  value={form.baseUrl}
+                  placeholder="https://api.openai.com/v1"
+                  onChange={(e) => setForm({ ...form, baseUrl: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('settings.model')}
+                <input
+                  value={form.model}
+                  placeholder="gpt-4o-mini"
+                  onChange={(e) => setForm({ ...form, model: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('settings.apiKey')}
+                {form.id && editingHasKey ? (
+                  <span className="muted"> {t('settings.key.saved')}</span>
+                ) : null}
+                <input
+                  type="password"
+                  value={form.apiKey}
+                  placeholder={form.id && editingHasKey ? t('settings.apiKey.ph') : t('settings.apiKey.need')}
+                  onChange={(e) => setForm({ ...form, apiKey: e.target.value })}
+                />
+              </label>
+              {form.id && editingHasKey && (
+                <label className="checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={form.clearKey}
+                    onChange={(e) => setForm({ ...form, clearKey: e.target.checked })}
+                  />
+                  {t('settings.key.clear')}
+                </label>
+              )}
+              <p className="muted" style={{ margin: 0, fontSize: 12, lineHeight: 1.6 }}>{t('settings.notice')}</p>
+              {modalTest && (
+                <div className={`conn-card-test${modalTest.ok ? ' ok' : ' bad'}`}>{modalTest.message}</div>
+              )}
+              {modalErr && <div className="error-text">{modalErr}</div>}
+              <div className="modal-actions">
+                <button type="button" disabled={profileBusy} onClick={closeModal}>{t('settings.cancel')}</button>
+                <button type="button" disabled={modalTesting} onClick={() => void testModal()}>
+                  {modalTesting ? t('settings.test.testing') : t('settings.test.run')}
+                </button>
+                <button type="button" className="primary" disabled={profileBusy} onClick={() => void saveProfile()}>
+                  {profileBusy ? t('settings.saving') : t('settings.save')}
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        </BodyPortal>
       )}
     </div>
   )

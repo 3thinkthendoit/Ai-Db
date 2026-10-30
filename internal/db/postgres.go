@@ -120,15 +120,138 @@ func (d *postgresDriver) ListObjects(ctx context.Context) ([]ObjectNode, error) 
 	}
 	nodes := make([]ObjectNode, 0, len(schemas))
 	for _, s := range schemas {
-		tables, err := d.ListTables(ctx, s)
-		if err != nil {
-			return nil, err
-		}
-		children := make([]ObjectNode, 0, len(tables))
-		for _, t := range tables {
-			children = append(children, ObjectNode{Name: t, Kind: "table"})
-		}
-		nodes = append(nodes, ObjectNode{Name: s, Kind: "schema", Children: children})
+		nodes = append(nodes, ObjectNode{Name: s, Kind: "schema", Lazy: true})
 	}
 	return nodes, nil
+}
+
+func (d *postgresDriver) ExpandObject(ctx context.Context, path []string) ([]ObjectNode, error) {
+	if len(path) == 0 {
+		return d.ListObjects(ctx)
+	}
+	schema := path[0]
+	if len(path) == 1 {
+		return postgresSchemaFolders(), nil
+	}
+	cat := path[1]
+	switch cat {
+	case CatTables, CatViews:
+		if len(path) == 2 {
+			kind := "table"
+			tableType := "BASE TABLE"
+			if cat == CatViews {
+				kind = "view"
+				tableType = "VIEW"
+			}
+			names, err := d.listTablesOfType(ctx, schema, tableType)
+			if err != nil {
+				return nil, err
+			}
+			return namesToNodes(names, kind, true), nil
+		}
+		if len(path) == 3 {
+			return tableDetailFolders(), nil
+		}
+		if len(path) == 4 {
+			table := path[2]
+			switch path[3] {
+			case CatColumns:
+				return d.listColumnNodes(ctx, schema, table)
+			case CatIndexes:
+				return d.listIndexNodes(ctx, schema, table)
+			}
+		}
+	case CatFunctions:
+		if len(path) == 2 {
+			names, err := d.listRoutines(ctx, schema, "FUNCTION")
+			if err != nil {
+				return nil, err
+			}
+			return namesToNodes(names, "function", false), nil
+		}
+	case CatProcedures:
+		if len(path) == 2 {
+			names, err := d.listRoutines(ctx, schema, "PROCEDURE")
+			if err != nil {
+				return nil, err
+			}
+			return namesToNodes(names, "procedure", false), nil
+		}
+	case CatSequences:
+		if len(path) == 2 {
+			names, err := d.listSequences(ctx, schema)
+			if err != nil {
+				return nil, err
+			}
+			return namesToNodes(names, "sequence", false), nil
+		}
+	}
+	return nil, badObjectPath(path)
+}
+
+func (d *postgresDriver) listTablesOfType(ctx context.Context, schema, tableType string) ([]string, error) {
+	q := fmt.Sprintf(
+		"SELECT table_name FROM information_schema.tables WHERE table_schema = '%s' AND table_type = '%s' ORDER BY table_name",
+		escapeSQLLiteral(schema), escapeSQLLiteral(tableType))
+	res, err := execSQL(ctx, d.db, q, 5000, false)
+	if err != nil {
+		return nil, err
+	}
+	return rowsFirstCol(res), nil
+}
+
+func (d *postgresDriver) listRoutines(ctx context.Context, schema, routineType string) ([]string, error) {
+	q := fmt.Sprintf(
+		"SELECT routine_name FROM information_schema.routines WHERE specific_schema = '%s' AND routine_type = '%s' ORDER BY routine_name",
+		escapeSQLLiteral(schema), escapeSQLLiteral(routineType))
+	res, err := execSQL(ctx, d.db, q, 5000, false)
+	if err != nil {
+		return nil, err
+	}
+	return rowsFirstCol(res), nil
+}
+
+func (d *postgresDriver) listSequences(ctx context.Context, schema string) ([]string, error) {
+	q := fmt.Sprintf(
+		"SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema = '%s' ORDER BY sequence_name",
+		escapeSQLLiteral(schema))
+	res, err := execSQL(ctx, d.db, q, 5000, false)
+	if err != nil {
+		return nil, err
+	}
+	return rowsFirstCol(res), nil
+}
+
+func (d *postgresDriver) listColumnNodes(ctx context.Context, schema, table string) ([]ObjectNode, error) {
+	q := fmt.Sprintf(
+		"SELECT column_name, data_type FROM information_schema.columns "+
+			"WHERE table_schema='%s' AND table_name='%s' ORDER BY ordinal_position",
+		escapeSQLLiteral(schema), escapeSQLLiteral(table))
+	res, err := execSQL(ctx, d.db, q, 2000, false)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]ObjectNode, 0, res.RowCount)
+	for _, r := range res.Rows {
+		if len(r) == 0 {
+			continue
+		}
+		label := r[0]
+		if len(r) > 1 && r[1] != "" {
+			label = r[0] + " · " + r[1]
+		}
+		out = append(out, ObjectNode{Name: label, Kind: "column"})
+	}
+	return out, nil
+}
+
+func (d *postgresDriver) listIndexNodes(ctx context.Context, schema, table string) ([]ObjectNode, error) {
+	q := fmt.Sprintf(
+		"SELECT indexname FROM pg_indexes WHERE schemaname='%s' AND tablename='%s' ORDER BY indexname",
+		escapeSQLLiteral(schema), escapeSQLLiteral(table))
+	res, err := execSQL(ctx, d.db, q, 2000, false)
+	if err != nil {
+		return nil, err
+	}
+	return namesToNodes(rowsFirstCol(res), "index", false), nil
 }

@@ -66,7 +66,7 @@ func (d *redisDriver) Execute(ctx context.Context, query string, maxRows int, al
 		maxRows = 500
 	}
 	start := time.Now()
-	parts := strings.Fields(strings.TrimSpace(query))
+	parts := splitRedisArgs(strings.TrimSpace(query))
 	if len(parts) == 0 {
 		return nil, fmt.Errorf("empty command")
 	}
@@ -179,19 +179,25 @@ func (d *redisDriver) Explain(ctx context.Context, _ string) (*QueryResult, erro
 }
 
 func (d *redisDriver) ListObjects(ctx context.Context) ([]ObjectNode, error) {
-	keys, err := d.ListTables(ctx, "")
-	if err != nil {
-		return nil, err
-	}
-	children := make([]ObjectNode, 0, len(keys))
-	for _, k := range keys {
-		children = append(children, ObjectNode{Name: k, Kind: "key"})
-	}
 	name := "db0"
 	if d.cfg.Database != "" {
 		name = "db" + d.cfg.Database
 	}
-	return []ObjectNode{{Name: name, Kind: "database", Children: children}}, nil
+	return []ObjectNode{{Name: name, Kind: "database", Lazy: true}}, nil
+}
+
+func (d *redisDriver) ExpandObject(ctx context.Context, path []string) ([]ObjectNode, error) {
+	if len(path) == 0 {
+		return d.ListObjects(ctx)
+	}
+	if len(path) == 1 {
+		keys, err := d.ListTables(ctx, "")
+		if err != nil {
+			return nil, err
+		}
+		return namesToNodes(keys, "key", false), nil
+	}
+	return nil, badObjectPath(path)
 }
 
 // RedisGet returns string value helper for agent tools.

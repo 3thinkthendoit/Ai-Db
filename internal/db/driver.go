@@ -18,10 +18,12 @@ type QueryResult struct {
 	Truncated  bool       `json:"truncated"`
 }
 
-// ObjectNode is a lightweight browser node (schema/table/key).
+// ObjectNode is a lightweight browser node (schema/table/key/folder).
+// Lazy=true means children are loaded on demand via ExpandObject.
 type ObjectNode struct {
 	Name     string       `json:"name"`
 	Kind     string       `json:"kind"`
+	Lazy     bool         `json:"lazy,omitempty"`
 	Children []ObjectNode `json:"children,omitempty"`
 }
 
@@ -31,6 +33,11 @@ type Driver interface {
 	Close() error
 	Execute(ctx context.Context, query string, maxRows int, allowWrites bool) (*QueryResult, error)
 	ListObjects(ctx context.Context) ([]ObjectNode, error)
+	// ExpandObject loads children for a tree path, e.g.
+	// [schema] → category folders; [schema,"tables"] → tables;
+	// [schema,"tables",table] → columns/indexes folders;
+	// [schema,"tables",table,"indexes"] → index leaves.
+	ExpandObject(ctx context.Context, path []string) ([]ObjectNode, error)
 	ListSchemas(ctx context.Context) ([]string, error)
 	ListTables(ctx context.Context, schema string) ([]string, error)
 	DescribeTable(ctx context.Context, schema, table string) (*QueryResult, error)

@@ -30,6 +30,10 @@ export function ExecuteQuery(arg1, arg2) {
   return window['go']['main']['App']['ExecuteQuery'](arg1, arg2);
 }
 
+export function ExpandObject(arg1, arg2) {
+  return window['go']['main']['App']['ExpandObject'](arg1, arg2);
+}
+
 export function GetLLMConfig() {
   return window['go']['main']['App']['GetLLMConfig']();
 }

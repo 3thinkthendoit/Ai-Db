@@ -89,7 +89,7 @@ func EnsureRedisReadOnly(cmd string, allowWrites bool) error {
 	if allowWrites {
 		return nil
 	}
-	parts := strings.Fields(strings.TrimSpace(cmd))
+	parts := splitRedisArgs(strings.TrimSpace(cmd))
 	if len(parts) == 0 {
 		return fmt.Errorf("empty command")
 	}

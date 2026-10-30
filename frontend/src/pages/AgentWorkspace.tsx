@@ -23,6 +23,9 @@ interface Props {
   connectionName: string
   taskName: string
   history: ChatMessage[]
+  /** Bumps when Query seeds a message; consume via takePendingMessage (once). */
+  seedTick?: number
+  takePendingMessage?: () => string
   /** Select + Connect; resolves true only when the connection is open. */
   onPickConnection: (id: string) => Promise<boolean>
   onGotoQuery: () => void
@@ -47,6 +50,10 @@ export function AgentWorkspace(props: Props) {
   const sendLock = useRef(false)
 
   const hasHistory = props.history.length > 0
+  // 侧栏点进已有任务 = 对话模式（即使还没有气泡）；欢迎首页仅无任务时出现。
+  const inSession = !!props.taskId
+  const showHomeHero = !inSession
+  const conversing = inSession || hasHistory
   const chips = useMemo(
     () => (CHIP_KEYS[activeTab] || CHIP_KEYS.query).map((key) => ({
       key,
@@ -83,6 +90,15 @@ export function AgentWorkspace(props: Props) {
     setDraft('')
     setBusy(false)
   }, [props.taskId])
+
+  // Auto-send seeded message from Query → Agent 解释 (ref consume = StrictMode-safe).
+  useEffect(() => {
+    if (!props.seedTick) return
+    const msg = props.takePendingMessage?.()?.trim()
+    if (!msg) return
+    void send(msg)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per seedTick
+  }, [props.seedTick])
 
   function applyChip(prompt: string) {
     setDraft(prompt)
@@ -168,8 +184,8 @@ export function AgentWorkspace(props: Props) {
   }
 
   return (
-    <div className={`chat${hasHistory ? '' : ' empty'}`}>
-      {hasHistory && (
+    <div className={`chat${showHomeHero ? ' empty' : ''}`}>
+      {conversing && (
         <div className="log archive">
           <div className="log-col">
             <div className="agent-header inline">
@@ -177,19 +193,24 @@ export function AgentWorkspace(props: Props) {
                 <strong>{props.taskName || t('ss.unnamedTask')}</strong>
                 <span className="muted"> · {props.connectionName || t('agent.noConnection')}</span>
               </div>
-              <button
-                type="button"
-                className="sm"
-                onClick={() => {
-                  const tid = props.taskId || props.onEnsureTask(props.connectionId || '')
-                  if (tid) props.onHistoryChangeFor(tid, [])
-                  setSteps([])
-                  setError('')
-                }}
-              >
-                {t('agent.clear')}
-              </button>
+              {hasHistory && (
+                <button
+                  type="button"
+                  className="sm"
+                  onClick={() => {
+                    const tid = props.taskId || props.onEnsureTask(props.connectionId || '')
+                    if (tid) props.onHistoryChangeFor(tid, [])
+                    setSteps([])
+                    setError('')
+                  }}
+                >
+                  {t('agent.clear')}
+                </button>
+              )}
             </div>
+            {!hasHistory && !busy && (
+              <div className="session-empty muted">{t('chat.sessionEmpty')}</div>
+            )}
             {props.history.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>
                 <div className="bubble-role">{m.role}</div>
@@ -214,8 +235,8 @@ export function AgentWorkspace(props: Props) {
         </div>
       )}
 
-      <div className={`home${hasHistory ? ' docked conversing' : ''}`}>
-        {!hasHistory && (
+      <div className={`home${conversing ? ' docked conversing' : ''}`}>
+        {showHomeHero && (
           <>
             <h1 className="home-title">{t('chat.title')}</h1>
             <p className="home-sub">{t('chat.subtitle')}</p>
@@ -271,10 +292,11 @@ export function AgentWorkspace(props: Props) {
                 <div className="host-menu-wrap" ref={hostMenuRoot}>
                   <button
                     type="button"
-                    className={`tool-pill meta-btn${showConnPicker ? ' open' : ''}${hasHistory ? ' host-bound' : ''}`}
+                    className={`tool-pill meta-btn${showConnPicker ? ' open' : ''}${inSession || hasHistory ? ' host-bound' : ''}`}
                     title={props.connectionName || t('chat.workspace')}
                     onClick={() => {
-                      if (hasHistory) return
+                      // 任务已绑定或已有对话：换库走顶栏下拉，底栏只读展示。
+                      if (inSession || hasHistory) return
                       if (props.connections.length === 0) {
                         props.onGotoConnections()
                         return
@@ -287,9 +309,9 @@ export function AgentWorkspace(props: Props) {
                     </svg>
                     <span className={`conn-dot${props.connected ? ' on' : ''}`} title={props.connected ? t('app.live') : t('app.offline')} />
                     <span className="meta-label">{props.connectionName || t('chat.workspace')}</span>
-                    {!hasHistory && <span className="caret-down">{showConnPicker ? '▴' : '▾'}</span>}
+                    {!inSession && !hasHistory && <span className="caret-down">{showConnPicker ? '▴' : '▾'}</span>}
                   </button>
-                  {showConnPicker && !hasHistory && (
+                  {showConnPicker && !inSession && !hasHistory && (
                     <div className="host-menu" role="listbox">
                       {props.connections.length === 0 ? (
                         <button type="button" className="model-menu-item" onClick={props.onGotoConnections}>
