@@ -96,6 +96,16 @@ func (m *Manager) Get(id string) (Driver, error) {
 	return e.driver, nil
 }
 
+// SetActiveSchema updates the UI-selected database/schema on an open driver.
+func (m *Manager) SetActiveSchema(id, schema string) error {
+	drv, err := m.Get(id)
+	if err != nil {
+		return err
+	}
+	drv.SetActiveSchema(schema)
+	return nil
+}
+
 // CloseAll closes every open driver.
 func (m *Manager) CloseAll() {
 	m.mu.Lock()

@@ -387,7 +387,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     runningLockRef.current = false
     setCtx(null)
     setImportTarget(null)
-    onActiveSchemaChange?.('')
+    // Schema selection is owned by App work-bar; do not clear it here (avoids race with defaults).
     // Only reset editors when the DB connection changes.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [connectionId, connType])

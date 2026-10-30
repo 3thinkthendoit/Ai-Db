@@ -21,6 +21,12 @@
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
   --dot-ok: #639922;
   --dot-warn: #ba7517;
+  --db-mysql: #fff;
+  --db-mysql-bg: #e67e22;
+  --db-postgres: #fff;
+  --db-postgres-bg: #336791;
+  --db-redis: #fff;
+  --db-redis-bg: #c0392b;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   color-scheme: light;
 }
@@ -47,6 +53,12 @@
   --shadow: 0 8px 24px rgba(0, 0, 0, 0.6);
   --dot-ok: #4dd47c;
   --dot-warn: #f5b04d;
+  --db-mysql: #1a1208;
+  --db-mysql-bg: #e67e22;
+  --db-postgres: #e8f2fa;
+  --db-postgres-bg: #3d7eae;
+  --db-redis: #1a0c0c;
+  --db-redis-bg: #d94a4a;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   color-scheme: dark;
 }

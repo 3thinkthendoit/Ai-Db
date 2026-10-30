@@ -66,6 +66,10 @@ export function SaveLLMSafety(arg1, arg2, arg3) {
   return window['go']['main']['App']['SaveLLMSafety'](arg1, arg2, arg3);
 }
 
+export function SetActiveSchema(arg1, arg2) {
+  return window['go']['main']['App']['SetActiveSchema'](arg1, arg2);
+}
+
 export function TestConnection(arg1) {
   return window['go']['main']['App']['TestConnection'](arg1);
 }

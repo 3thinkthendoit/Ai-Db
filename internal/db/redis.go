@@ -13,8 +13,9 @@ import (
 )
 
 type redisDriver struct {
-	client *redis.Client
-	cfg    config.Connection
+	client       *redis.Client
+	cfg          config.Connection
+	activeDBName string // display name e.g. db0
 }
 
 func openRedis(ctx context.Context, c config.Connection) (Driver, error) {
@@ -57,6 +58,34 @@ func (d *redisDriver) Ping(ctx context.Context) error {
 }
 
 func (d *redisDriver) Close() error { return d.client.Close() }
+
+func (d *redisDriver) SetActiveSchema(schema string) {
+	schema = strings.TrimSpace(schema)
+	d.activeDBName = schema
+	idx, ok := parseRedisDBIndex(schema)
+	if !ok {
+		return
+	}
+	// go-redis Client.Do SELECT updates the connection's selected DB for subsequent commands.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	_ = d.client.Do(ctx, "SELECT", idx).Err()
+}
+
+func parseRedisDBIndex(schema string) (int, bool) {
+	s := strings.TrimSpace(strings.ToLower(schema))
+	if s == "" {
+		return 0, false
+	}
+	if strings.HasPrefix(s, "db") {
+		s = strings.TrimPrefix(s, "db")
+	}
+	n, err := strconv.Atoi(s)
+	if err != nil || n < 0 {
+		return 0, false
+	}
+	return n, true
+}
 
 func (d *redisDriver) Execute(ctx context.Context, query string, maxRows int, allowWrites bool) (*QueryResult, error) {
 	if err := EnsureRedisReadOnly(query, allowWrites); err != nil {

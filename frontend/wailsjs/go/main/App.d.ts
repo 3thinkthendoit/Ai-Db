@@ -37,6 +37,8 @@ export function SaveLLMProfile(arg1:main.SaveLLMProfileRequest):Promise<config.L
 
 export function SaveLLMSafety(arg1:boolean,arg2:number,arg3:number):Promise<void>;
 
+export function SetActiveSchema(arg1:string,arg2:string):Promise<void>;
+
 export function TestConnection(arg1:config.Connection):Promise<void>;
 
 export function TestLLMProfile(arg1:string,arg2:string,arg3:string,arg4:string):Promise<main.LLMTestResult>;

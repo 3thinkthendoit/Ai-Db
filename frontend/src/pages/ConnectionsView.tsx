@@ -84,7 +84,7 @@ export function ConnectionsView(props: Props) {
               <div className="conn-card-main">
                 <div className="conn-card-name">
                   {c.name}
-                  <span className="tag">{typeLabel(c.type)}</span>
+                  <span className={`tag ${c.type}`}>{typeLabel(c.type)}</span>
                   {live && <span className="tag ok">{t('conn.liveTag')}</span>}
                   {!c.passwordSet && c.type !== 'redis' && (
                     <span className="tag danger">{t('conn.noSecret')}</span>

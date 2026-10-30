@@ -289,6 +289,7 @@ export namespace main {
 	    history: agent.Message[];
 	    message: string;
 	    confirmWrites: boolean;
+	    preferredSchema: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new AgentChatRequest(source);
@@ -300,6 +301,7 @@ export namespace main {
 	        this.history = this.convertValues(source["history"], agent.Message);
 	        this.message = source["message"];
 	        this.confirmWrites = source["confirmWrites"];
+	        this.preferredSchema = source["preferredSchema"];
 	    }
 	
 		convertValues(a: any, classs: any, asMap: boolean = false): any {

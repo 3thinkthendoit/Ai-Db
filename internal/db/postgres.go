@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"fmt"
 	"net/url"
+	"strings"
+	"sync"
 	"time"
 
 	"AI-DB/internal/config"
@@ -13,8 +15,10 @@ import (
 )
 
 type postgresDriver struct {
-	db  *sql.DB
-	cfg config.Connection
+	db           *sql.DB
+	cfg          config.Connection
+	mu           sync.Mutex
+	activeSchema string
 }
 
 func openPostgres(ctx context.Context, c config.Connection) (Driver, error) {
@@ -55,8 +59,24 @@ func (d *postgresDriver) Ping(ctx context.Context) error { return pingSQL(ctx, d
 
 func (d *postgresDriver) Close() error { return d.db.Close() }
 
+func (d *postgresDriver) SetActiveSchema(schema string) {
+	d.mu.Lock()
+	d.activeSchema = strings.TrimSpace(schema)
+	d.mu.Unlock()
+}
+
+func (d *postgresDriver) sessionSQL() string {
+	d.mu.Lock()
+	s := d.activeSchema
+	d.mu.Unlock()
+	if s == "" {
+		return ""
+	}
+	return "SET search_path TO " + quotePGIdent(s)
+}
+
 func (d *postgresDriver) Execute(ctx context.Context, query string, maxRows int, allowWrites bool) (*QueryResult, error) {
-	return execSQL(ctx, d.db, query, maxRows, allowWrites)
+	return execSQLWithSession(ctx, d.db, d.sessionSQL(), query, maxRows, allowWrites)
 }
 
 func (d *postgresDriver) ListSchemas(ctx context.Context) ([]string, error) {
@@ -110,7 +130,11 @@ func (d *postgresDriver) Explain(ctx context.Context, query string) (*QueryResul
 	if err := EnsureExplainReadOnly(query); err != nil {
 		return nil, err
 	}
-	return execSQL(ctx, d.db, "EXPLAIN "+query, 500, false)
+	return execSQLWithSession(ctx, d.db, d.sessionSQL(), "EXPLAIN "+query, 500, false)
+}
+
+func quotePGIdent(name string) string {
+	return `"` + strings.ReplaceAll(name, `"`, `""`) + `"`
 }
 
 func (d *postgresDriver) ListObjects(ctx context.Context) ([]ObjectNode, error) {

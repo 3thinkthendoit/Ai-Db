@@ -27,6 +27,7 @@ import {
   DeleteConnection,
   ListConnections,
   ListObjects,
+  SetActiveSchema,
   TestConnection,
   UpsertConnection,
 } from '../wailsjs/go/main/App'
@@ -57,8 +58,8 @@ function App() {
   const [activeSchema, setActiveSchema] = useState('')
   const [agentSeedTick, setAgentSeedTick] = useState(0)
   const agentPendingRef = useRef('')
-  const [dbMenuOpen, setDbMenuOpen] = useState(false)
-  const dbMenuRoot = useRef<HTMLDivElement>(null)
+  const [schemaMenuOpen, setSchemaMenuOpen] = useState(false)
+  const schemaMenuRoot = useRef<HTMLDivElement>(null)
 
   const persistTasks = useCallback((next: Task[]) => {
     setTasks(next)
@@ -97,8 +98,8 @@ function App() {
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
-      if (dbMenuRoot.current && !dbMenuRoot.current.contains(e.target as Node)) {
-        setDbMenuOpen(false)
+      if (schemaMenuRoot.current && !schemaMenuRoot.current.contains(e.target as Node)) {
+        setSchemaMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', onDoc)
@@ -143,12 +144,50 @@ function App() {
     void refreshObjects()
   }, [refreshObjects])
 
-  // SQL surface needs a live driver.
+  // Workbench (Agent / Query) needs a live driver for the task connection.
   useEffect(() => {
-    if (mode !== 'work' || workSurface !== 'sql' || !workConnId || connectedIds.has(workConnId)) return
+    if (mode !== 'work' || !workConnId || connectedIds.has(workConnId)) return
     void handleConnect(workConnId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, workSurface, workConnId])
+
+  const schemaOptions = useMemo(
+    () =>
+      objects
+        .filter((n) => n.kind === 'schema' || n.kind === 'database')
+        .map((n) => n.name)
+        .filter(Boolean),
+    [objects]
+  )
+
+  // Keep / default the selected schema when objects or connection change.
+  useEffect(() => {
+    if (!workConnId) {
+      setActiveSchema('')
+      return
+    }
+    if (schemaOptions.length === 0) {
+      // Objects still loading / empty — seed from connection default (App owns schema; QueryView must not clear).
+      setActiveSchema(activeConn?.database || '')
+      return
+    }
+    setActiveSchema((prev) => {
+      if (prev && schemaOptions.includes(prev)) return prev
+      const prefer = activeConn?.database || ''
+      if (prefer && schemaOptions.includes(prefer)) return prefer
+      return schemaOptions[0]
+    })
+  }, [workConnId, schemaOptions, activeConn?.database])
+
+  // Push UI-selected schema into the live driver (USE / search_path / SELECT).
+  // Wait until schemaOptions is known so we don't apply a PG database name as search_path.
+  useEffect(() => {
+    if (!workConnId || !connectedIds.has(workConnId) || !activeSchema) return
+    if (schemaOptions.length === 0 || !schemaOptions.includes(activeSchema)) return
+    void SetActiveSchema(workConnId, activeSchema).catch((e: any) => {
+      setBanner(String(e?.message || e))
+    })
+  }, [workConnId, connectedIds, activeSchema, schemaOptions])
 
   async function handleConnect(id: string): Promise<boolean> {
     setBanner('')
@@ -315,98 +354,62 @@ function App() {
             {(workSurface === 'sql' || !!activeTask) && (
               <header className="work-bar">
                 <div className="work-bar-left">
-                  <div className="host-menu-wrap work-bar-db" ref={dbMenuRoot}>
+                  <div
+                    className={`work-bar-node${activeConn ? '' : ' muted'}`}
+                    title={
+                      activeConn
+                        ? `${activeConn.name} · ${activeConn.type} · ${activeConn.host}:${activeConn.port}`
+                        : t('work.node.offline')
+                    }
+                  >
+                    <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                      <ellipse cx="12" cy="6" rx="7" ry="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                      <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                      <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                    </svg>
+                    <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
+                    <span className="work-bar-node-label">
+                      {activeConn
+                        ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
+                        : t('work.node.offline')}
+                    </span>
+                  </div>
+                  <div className="host-menu-wrap work-bar-schema-pick" ref={schemaMenuRoot}>
                     <button
                       type="button"
-                      className={`tool-pill meta-btn work-db-btn${dbMenuOpen ? ' open' : ''}`}
-                      title={
-                        activeConn
-                          ? `${activeConn.name} · ${activeConn.type} · ${activeConn.host}:${activeConn.port}`
-                          : t('work.db.pick')
-                      }
-                      onClick={() => {
-                        if (connections.length === 0) {
-                          setMode('connections')
-                          return
-                        }
-                        setDbMenuOpen((v) => !v)
-                      }}
+                      className={`tool-pill meta-btn work-schema-btn${schemaMenuOpen ? ' open' : ''}`}
+                      title={activeSchema ? t('work.schema.hint', { name: activeSchema }) : t('work.schema.pick')}
+                      disabled={!workConnId || !connectedIds.has(workConnId)}
+                      onClick={() => setSchemaMenuOpen((v) => !v)}
                     >
-                      <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                        <ellipse cx="12" cy="6" rx="7" ry="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                        <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                        <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                      </svg>
-                      <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
-                      <span className="meta-label">
-                        {activeConn
-                          ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
-                          : t('work.db.pick')}
-                      </span>
-                      <span className="caret-down">{dbMenuOpen ? '▴' : '▾'}</span>
+                      <span className="work-bar-schema-label">{t('work.schema')}</span>
+                      <strong className="work-bar-schema-name">{activeSchema || t('work.schema.pick')}</strong>
+                      <span className="caret-down">{schemaMenuOpen ? '▴' : '▾'}</span>
                     </button>
-                    {dbMenuOpen && (
+                    {schemaMenuOpen && (
                       <div className="host-menu" role="listbox">
-                        {connections.length === 0 ? (
-                          <button
-                            type="button"
-                            className="model-menu-item"
-                            onClick={() => {
-                              setDbMenuOpen(false)
-                              setMode('connections')
-                            }}
-                          >
-                            {t('work.db.empty')}
+                        {schemaOptions.length === 0 ? (
+                          <button type="button" className="model-menu-item" disabled>
+                            {t('work.schema.empty')}
                           </button>
                         ) : (
-                          <>
-                            {connections.map((c) => (
-                              <button
-                                key={c.id}
-                                type="button"
-                                className={`model-menu-item${c.id === workConnId ? ' on' : ''}`}
-                                onClick={() => {
-                                  if (c.id === workConnId) {
-                                    setDbMenuOpen(false)
-                                    return
-                                  }
-                                  if (activeTask && activeTask.messages.length > 0) {
-                                    if (!window.confirm(t('work.db.switchConfirm'))) return
-                                  }
-                                  setDbMenuOpen(false)
-                                  setActiveConnId(c.id)
-                                  if (activeTask) {
-                                    persistTasks(tasks.map((task) =>
-                                      task.id === activeTask.id ? touchTask(task, { connectionId: c.id }) : task
-                                    ))
-                                  }
-                                  void handleConnect(c.id)
-                                }}
-                              >
-                                {c.name} · {c.type} · {c.host}:{c.port}
-                              </button>
-                            ))}
+                          schemaOptions.map((name) => (
                             <button
+                              key={name}
                               type="button"
-                              className="model-menu-item work-db-manage"
+                              className={`model-menu-item${name === activeSchema ? ' on' : ''}`}
                               onClick={() => {
-                                setDbMenuOpen(false)
-                                setMode('connections')
+                                setActiveSchema(name)
+                                setSchemaMenuOpen(false)
                               }}
                             >
-                              {t('work.db.manage')}
+                              {name}
                             </button>
-                          </>
+                          ))
                         )}
                       </div>
                     )}
                   </div>
-                  {workSurface === 'sql' && activeSchema && (
-                    <div className="work-bar-schema" title={t('work.schema.hint', { name: activeSchema })}>
-                      <span className="work-bar-schema-label">{t('work.schema')}</span>
-                      <strong className="work-bar-schema-name">{activeSchema}</strong>
-                    </div>
-                  )}
                 </div>
                 <div className="work-bar-right">
                   <div className="seg" role="tablist" aria-label="Agent / Query">
@@ -442,6 +445,7 @@ function App() {
                   connected={!!workConnId && connectedIds.has(workConnId)}
                   connections={connections}
                   connectionName={activeConn?.name || ''}
+                  preferredSchema={activeSchema}
                   taskName={activeTask?.name || ''}
                   history={workspaceHistory}
                   seedTick={agentSeedTick}

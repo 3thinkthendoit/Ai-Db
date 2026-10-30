@@ -41,7 +41,7 @@ func NewService(mgr *db.Manager) *Service {
 
 // Run executes the agent loop until the model stops calling tools or hits the step limit.
 // confirmWrites must be true (user confirmed this turn) for writes even when llmCfg.AllowWrites is on.
-func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.Connection, history []Message, userText string, confirmWrites bool) (*ChatResponse, error) {
+func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.Connection, history []Message, userText string, confirmWrites bool, preferredSchema string) (*ChatResponse, error) {
 	if _, err := s.mgr.Get(conn.ID); err != nil {
 		return nil, fmt.Errorf("open the connection before using Agent: %w", err)
 	}
@@ -50,12 +50,15 @@ func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.
 		maxSteps = 12
 	}
 	allowWrite := llmCfg.AllowWrites && confirmWrites
+	if preferredSchema = strings.TrimSpace(preferredSchema); preferredSchema != "" {
+		_ = s.mgr.SetActiveSchema(conn.ID, preferredSchema)
+	}
 	runner := NewToolRunner(s.mgr, conn.ID, conn.Type, allowWrite, llmCfg.MaxRows)
 	client := NewClient(llmCfg)
 
 	effective := llmCfg
 	effective.AllowWrites = allowWrite
-	system := buildSystemPrompt(conn, effective)
+	system := buildSystemPrompt(conn, effective, preferredSchema)
 	messages := make([]Message, 0, len(history)+4)
 	messages = append(messages, Message{Role: "system", Content: system})
 	for _, m := range history {
@@ -111,7 +114,7 @@ func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.
 	return out, nil
 }
 
-func buildSystemPrompt(conn config.Connection, llm config.LLMConfig) string {
+func buildSystemPrompt(conn config.Connection, llm config.LLMConfig, preferredSchema string) string {
 	mode := "READ-ONLY"
 	if llm.AllowWrites {
 		mode = "WRITES ALLOWED (still prefer SELECT/read; confirm destructive ops carefully)"
@@ -122,6 +125,10 @@ func buildSystemPrompt(conn config.Connection, llm config.LLMConfig) string {
 	b.WriteString(fmt.Sprintf("Connection name: %s\n", conn.Name))
 	b.WriteString(fmt.Sprintf("Engine: %s\n", conn.Type))
 	b.WriteString(fmt.Sprintf("Host: %s  Database/DB index: %s\n", conn.Host, conn.Database))
+	if s := strings.TrimSpace(preferredSchema); s != "" {
+		b.WriteString(fmt.Sprintf("User-selected database/schema: %s\n", s))
+		b.WriteString("Prefer this schema for list_tables/describe and qualify SQL accordingly (MySQL: USE when helpful).\n")
+	}
 	b.WriteString(fmt.Sprintf("Safety mode: %s\n", mode))
 	b.WriteString(fmt.Sprintf("Result row limit: %d\n", llm.MaxRows))
 	b.WriteString("When answering, cite what you queried. Do not invent schema.\n")

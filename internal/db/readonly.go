@@ -101,7 +101,7 @@ func EnsureRedisReadOnly(cmd string, allowWrites bool) error {
 		"LRANGE": true, "LLEN": true, "LINDEX": true,
 		"SMEMBERS": true, "SCARD": true, "SISMEMBER": true, "SRANDMEMBER": true,
 		"ZRANGE": true, "ZREVRANGE": true, "ZCARD": true, "ZSCORE": true, "ZRANK": true,
-		"INFO": true, "DBSIZE": true, "PING": true, "ECHO": true, "TIME": true,
+		"INFO": true, "DBSIZE": true, "PING": true, "ECHO": true, "TIME": true, "SELECT": true,
 		"XRANGE": true, "XLEN": true, "XINFO": true,
 		"MEMORY": true, "OBJECT": true, "DUMP": true,
 	}

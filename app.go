@@ -240,6 +240,11 @@ func (a *App) ExecuteQuery(connectionID, query string) (*db.QueryResult, error) 
 	return drv.Execute(a.bgCtx(), query, cfg.LLM.MaxRows, cfg.LLM.AllowWrites)
 }
 
+// SetActiveSchema remembers the workbench-selected database/schema for an open connection.
+func (a *App) SetActiveSchema(connectionID, schema string) error {
+	return a.mgr.SetActiveSchema(connectionID, schema)
+}
+
 // GetLLMConfig returns active LLM settings with masked API key (plus safety knobs).
 func (a *App) GetLLMConfig() config.LLMConfig {
 	a.mu.Lock()
@@ -492,10 +497,11 @@ func (a *App) SaveLLMConfig(llm config.LLMConfig) error {
 
 // AgentChatRequest is the frontend payload for an agent turn.
 type AgentChatRequest struct {
-	ConnectionID  string          `json:"connectionId"`
-	History       []agent.Message `json:"history"`
-	Message       string          `json:"message"`
-	ConfirmWrites bool            `json:"confirmWrites"`
+	ConnectionID     string          `json:"connectionId"`
+	History          []agent.Message `json:"history"`
+	Message          string          `json:"message"`
+	ConfirmWrites    bool            `json:"confirmWrites"`
+	PreferredSchema  string          `json:"preferredSchema"`
 }
 
 // AgentChat runs one user message through the multi-step agent.
@@ -513,7 +519,7 @@ func (a *App) AgentChat(req AgentChatRequest) (*agent.ChatResponse, error) {
 	if a.agent == nil {
 		a.agent = agent.NewService(a.mgr)
 	}
-	return a.agent.Run(a.bgCtx(), llm, c, req.History, req.Message, req.ConfirmWrites)
+	return a.agent.Run(a.bgCtx(), llm, c, req.History, req.Message, req.ConfirmWrites, req.PreferredSchema)
 }
 
 // IsMutatingQuery reports whether the query looks like a write/DDL/admin command.

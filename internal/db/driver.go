@@ -43,6 +43,11 @@ type Driver interface {
 	DescribeTable(ctx context.Context, schema, table string) (*QueryResult, error)
 	Explain(ctx context.Context, query string) (*QueryResult, error)
 	Type() config.ConnType
+	// SetActiveSchema remembers the UI-selected database/schema for this open driver.
+	// MySQL: applied as USE on the same pooled conn as each Execute/Explain.
+	// Postgres: applied as SET search_path.
+	// Redis: applied as SELECT <db index>.
+	SetActiveSchema(schema string)
 }
 
 // Open creates a driver for the given connection profile.

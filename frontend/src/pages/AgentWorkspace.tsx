@@ -21,6 +21,7 @@ interface Props {
   connected: boolean
   connections: Connection[]
   connectionName: string
+  preferredSchema?: string
   taskName: string
   history: ChatMessage[]
   /** Bumps when Query seeds a message; consume via takePendingMessage (once). */
@@ -166,6 +167,7 @@ export function AgentWorkspace(props: Props) {
           history: priorHistory.map((m) => ({ role: m.role, content: m.content })),
           message: text,
           confirmWrites,
+          preferredSchema: props.preferredSchema || '',
         } as any)
         props.onHistoryChangeFor(
           taskId,

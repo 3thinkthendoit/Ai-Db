@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"strings"
+	"sync"
 	"time"
 
 	"AI-DB/internal/config"
@@ -12,8 +14,10 @@ import (
 )
 
 type mysqlDriver struct {
-	db  *sql.DB
-	cfg config.Connection
+	db           *sql.DB
+	cfg          config.Connection
+	mu           sync.Mutex
+	activeSchema string
 }
 
 func openMySQL(ctx context.Context, c config.Connection) (Driver, error) {
@@ -55,8 +59,24 @@ func (d *mysqlDriver) Ping(ctx context.Context) error { return pingSQL(ctx, d.db
 
 func (d *mysqlDriver) Close() error { return d.db.Close() }
 
+func (d *mysqlDriver) SetActiveSchema(schema string) {
+	d.mu.Lock()
+	d.activeSchema = strings.TrimSpace(schema)
+	d.mu.Unlock()
+}
+
+func (d *mysqlDriver) sessionSQL() string {
+	d.mu.Lock()
+	s := d.activeSchema
+	d.mu.Unlock()
+	if s == "" {
+		return ""
+	}
+	return "USE " + quoteMySQLIdent(s)
+}
+
 func (d *mysqlDriver) Execute(ctx context.Context, query string, maxRows int, allowWrites bool) (*QueryResult, error) {
-	return execSQL(ctx, d.db, query, maxRows, allowWrites)
+	return execSQLWithSession(ctx, d.db, d.sessionSQL(), query, maxRows, allowWrites)
 }
 
 func (d *mysqlDriver) ListSchemas(ctx context.Context) ([]string, error) {
@@ -107,7 +127,11 @@ func (d *mysqlDriver) Explain(ctx context.Context, query string) (*QueryResult, 
 	if err := EnsureExplainReadOnly(query); err != nil {
 		return nil, err
 	}
-	return execSQL(ctx, d.db, "EXPLAIN "+query, 500, false)
+	return execSQLWithSession(ctx, d.db, d.sessionSQL(), "EXPLAIN "+query, 500, false)
+}
+
+func quoteMySQLIdent(name string) string {
+	return "`" + strings.ReplaceAll(name, "`", "``") + "`"
 }
 
 func (d *mysqlDriver) ListObjects(ctx context.Context) ([]ObjectNode, error) {
