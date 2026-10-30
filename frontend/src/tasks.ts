@@ -37,6 +37,11 @@ export function normalizeTasks(list: unknown): Task[] {
       .filter((m): m is ChatMessage => !!m && typeof m === 'object'
         && (m.role === 'user' || m.role === 'assistant')
         && typeof m.content === 'string')
+      .map((m) => ({
+        role: m.role,
+        content: m.content,
+        ...(typeof m.createdAt === 'number' ? { createdAt: m.createdAt } : {}),
+      }))
       .slice(-MAX_MESSAGES_PER_TASK)
     cleaned.push({
       id: item.id,

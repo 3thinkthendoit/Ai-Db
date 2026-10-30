@@ -52,6 +52,8 @@ export interface ObjectNode {
 export interface ChatMessage {
   role: 'user' | 'assistant' | 'system' | 'tool'
   content: string
+  /** Epoch ms when the message was added (optional for older persisted turns). */
+  createdAt?: number
 }
 
 export interface StepEvent {

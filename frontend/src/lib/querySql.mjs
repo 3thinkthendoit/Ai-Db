@@ -264,3 +264,52 @@ export function explainSql(sql) {
   if (/^\s*explain\b/i.test(body)) return body
   return `EXPLAIN ${body}`
 }
+
+/**
+ * Same-connection force overwrite: DROP target → CREATE LIKE → INSERT SELECT.
+ * @param {string} connType
+ * @param {string} sourceSchema
+ * @param {string} targetSchema
+ * @param {string[]} tables
+ * @param {{ head: string, oneByOne: string, stepDrop: string, stepCreate: string, stepData: string, fkHint?: string }} labels
+ */
+export function buildCopyToOtherDbSql(connType, sourceSchema, targetSchema, tables, labels) {
+  const srcSchema = String(sourceSchema || '').trim()
+  const tgtSchema = String(targetSchema || '').trim()
+  const names = (tables || []).map((t) => String(t || '').trim()).filter(Boolean)
+  if (!srcSchema || !tgtSchema || !names.length) return ''
+
+  const mysql = connType === 'mysql'
+  const pg = connType === 'postgres'
+  const lines = [`-- ${labels.head}`, `-- ${labels.oneByOne}`, '']
+  // DROP/INSERT can hit FK order; widen the force-overwrite window.
+  if (mysql) {
+    lines.push('SET FOREIGN_KEY_CHECKS = 0;')
+    lines.push('')
+  } else if (pg && labels.fkHint) {
+    lines.push(`-- ${labels.fkHint}`)
+    lines.push('')
+  }
+  for (const table of names) {
+    const src = tableRef(connType, srcSchema, table)
+    const tgt = tableRef(connType, tgtSchema, table)
+    lines.push(`-- === ${table} ===`)
+    lines.push(`-- ${labels.stepDrop}`)
+    // CASCADE so dependent FKs in the target schema do not block overwrite.
+    lines.push(`DROP TABLE IF EXISTS ${tgt}${pg ? ' CASCADE' : ''};`)
+    lines.push(`-- ${labels.stepCreate}`)
+    if (pg) {
+      lines.push(`CREATE TABLE ${tgt} (LIKE ${src} INCLUDING ALL);`)
+    } else {
+      lines.push(`CREATE TABLE ${tgt} LIKE ${src};`)
+    }
+    lines.push(`-- ${labels.stepData}`)
+    lines.push(`INSERT INTO ${tgt} SELECT * FROM ${src};`)
+    lines.push('')
+  }
+  if (mysql) {
+    lines.push('SET FOREIGN_KEY_CHECKS = 1;')
+    lines.push('')
+  }
+  return `${lines.join('\n').trim()}\n`
+}

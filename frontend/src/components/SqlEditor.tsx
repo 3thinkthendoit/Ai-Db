@@ -64,16 +64,16 @@ const baseChrome = EditorView.theme({
 })
 
 const highlightLight = HighlightStyle.define([
-  { tag: t.keyword, color: '#185fa5', fontWeight: '600' },
-  { tag: t.typeName, color: '#854f0b' },
-  { tag: t.string, color: '#3b6d11' },
-  { tag: t.number, color: '#a32d2d' },
-  { tag: t.comment, color: '#8a8983', fontStyle: 'italic' },
-  { tag: t.operator, color: '#5f5e5a' },
-  { tag: t.punctuation, color: '#5f5e5a' },
-  { tag: t.name, color: '#2c2c2a' },
-  { tag: t.bool, color: '#185fa5' },
-  { tag: t.null, color: '#185fa5' },
+  { tag: t.keyword, color: '#007aff', fontWeight: '600' },
+  { tag: t.typeName, color: '#ff9500' },
+  { tag: t.string, color: '#34c759' },
+  { tag: t.number, color: '#ff3b30' },
+  { tag: t.comment, color: '#8e8e93', fontStyle: 'italic' },
+  { tag: t.operator, color: '#5c5c5c' },
+  { tag: t.punctuation, color: '#5c5c5c' },
+  { tag: t.name, color: '#1d1d1f' },
+  { tag: t.bool, color: '#007aff' },
+  { tag: t.null, color: '#007aff' },
 ])
 
 const highlightDark = HighlightStyle.define([

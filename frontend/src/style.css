@@ -1,26 +1,27 @@
-/* Theme tokens aligned with Ai-Shell */
+/* Light: TablePlus-like flat gray / system blue. Dark tokens unchanged. */
 :root, [data-theme='light'] {
-  --bg: #fafaf8;
+  --bg: #f5f5f5;
   --surface: #ffffff;
-  --surface-2: #f4f3ef;
-  --border: rgba(0, 0, 0, 0.12);
-  --border-strong: rgba(0, 0, 0, 0.24);
-  --text: #2c2c2a;
-  --text-2: #5f5e5a;
-  --text-3: #8a8983;
-  --accent: #185fa5;
-  --accent-bg: #e6f1fb;
-  --danger: #a32d2d;
-  --danger-bg: #fcebeb;
-  --warn: #854f0b;
-  --warn-bg: #faeeda;
-  --ok: #3b6d11;
-  --ok-bg: #eaf3de;
+  --surface-2: #ececec;
+  --border: #d1d1d1;
+  --border-strong: #bdbdbd;
+  --text: #1d1d1f;
+  --text-2: #5c5c5c;
+  --text-3: #8e8e93;
+  --accent: #007aff;
+  --accent-bg: #e8f1ff;
+  --danger: #ff3b30;
+  --danger-bg: #ffecea;
+  --warn: #ff9500;
+  --warn-bg: #fff4e5;
+  --ok: #34c759;
+  --ok-bg: #eaf8ef;
   --hover-overlay: rgba(0, 0, 0, 0.05);
-  --inset-bg: rgba(255, 255, 255, 0.7);
-  --shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
-  --dot-ok: #639922;
-  --dot-warn: #ba7517;
+  --inset-bg: #fafafa;
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.08);
+  --row-alt: #fafafa;
+  --dot-ok: #34c759;
+  --dot-warn: #ff9500;
   --db-mysql: #fff;
   --db-mysql-bg: #e67e22;
   --db-postgres: #fff;
@@ -59,6 +60,7 @@
   --db-postgres-bg: #3d7eae;
   --db-redis: #1a0c0c;
   --db-redis-bg: #d94a4a;
+  --row-alt: rgba(255, 255, 255, 0.03);
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   color-scheme: dark;
 }
@@ -96,18 +98,72 @@ button {
   align-items: center;
   justify-content: center;
   padding: 0 14px;
-  transition: background 0.12s, border-color 0.12s;
+  transition: background 0.12s, border-color 0.12s, filter 0.12s;
 }
 button:hover:not(:disabled) { background: var(--surface-2); border-color: var(--border-strong); }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 button.primary { background: var(--accent); color: #0a0c0a; border-color: var(--accent); }
-[data-theme='light'] button.primary { color: #fff; }
-[data-theme='light'] button.primary:hover:not(:disabled) { background: #14507f; }
 [data-theme='dark'] button.primary:hover:not(:disabled) { background: #33e899; }
 button.danger { background: var(--danger-bg); color: var(--danger); border-color: var(--danger); }
 button.ghost { background: transparent; border-color: transparent; }
 button.ghost:hover:not(:disabled) { background: var(--hover-overlay); }
 button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
+
+/* TablePlus-like light buttons — skip chrome/icon controls (send, twist, msg-action, …). */
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item) {
+  font-weight: 500;
+  border-radius: 6px;
+  min-height: 28px;
+  padding: 0 12px;
+  background: #f7f7f7;
+  border-color: #cfcfcf;
+  color: var(--text);
+  box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset;
+}
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):hover:not(:disabled) {
+  background: #efefef;
+  border-color: #bdbdbd;
+}
+[data-theme='light'] button.primary {
+  background: var(--accent);
+  color: #fff;
+  border-color: #0070e8;
+  box-shadow: none;
+  font-weight: 560;
+}
+[data-theme='light'] button.primary:hover:not(:disabled) {
+  background: #0066d6;
+  border-color: #0066d6;
+  filter: none;
+}
+[data-theme='light'] button.danger {
+  background: #fff;
+  color: var(--danger);
+  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
+  box-shadow: none;
+}
+[data-theme='light'] button.ghost {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+[data-theme='light'] button.sm:not(.tree-twist):not(.send-btn):not(.msg-action) {
+  min-height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+  border-radius: 5px;
+}
+[data-theme='light'] button.ghost,
+[data-theme='light'] button.sm.ghost-link {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+[data-theme='light'] button.ghost:hover:not(:disabled),
+[data-theme='light'] button.sm.ghost-link:hover:not(:disabled) {
+  background: var(--hover-overlay);
+  border-color: transparent;
+}
 
 input:not([type='checkbox']):not([type='radio']), select, textarea {
   font: inherit;
@@ -119,12 +175,24 @@ input:not([type='checkbox']):not([type='radio']), select, textarea {
   width: 100%;
   outline: none;
 }
+[data-theme='light'] input:not([type='checkbox']):not([type='radio']),
+[data-theme='light'] select,
+[data-theme='light'] textarea {
+  border-radius: 6px;
+  background: #fff;
+  border-color: #d1d1d1;
+}
 input:not([type='checkbox']):not([type='radio']), textarea { -webkit-appearance: none; appearance: none; }
 input:not([type='checkbox']):not([type='radio'])::placeholder,
 textarea::placeholder { color: var(--text-3); }
 input:focus, select:focus, textarea:focus {
   border-color: var(--accent);
   box-shadow: 0 0 0 3px var(--accent-bg);
+}
+[data-theme='light'] input:focus,
+[data-theme='light'] select:focus,
+[data-theme='light'] textarea:focus {
+  box-shadow: 0 0 0 3px rgba(0, 122, 255, 0.18);
 }
 
 ::-webkit-scrollbar { width: 10px; height: 10px; }

@@ -31,6 +31,39 @@ function canExpand(node: ObjectNode) {
   return node.kind === 'schema' || node.kind === 'database' || node.kind === 'folder' || node.kind === 'table' || node.kind === 'view'
 }
 
+/** Fixed icon slot class — every row gets one so the glyph column stays aligned. */
+function icoClass(node: ObjectNode): string {
+  switch (node.kind) {
+    case 'schema':
+    case 'database':
+      return 'db'
+    case 'folder':
+      return 'folder'
+    case 'table':
+      return 'table'
+    case 'view':
+      return 'view'
+    case 'procedure':
+      return 'proc'
+    case 'function':
+      return 'fn'
+    case 'trigger':
+      return 'trigger'
+    case 'event':
+      return 'event'
+    case 'sequence':
+      return 'seq'
+    case 'column':
+      return 'col'
+    case 'index':
+      return 'idx'
+    case 'key':
+      return 'key'
+    default:
+      return 'folder'
+  }
+}
+
 const CTX_KINDS = new Set([
   'schema', 'database', 'folder',
   'table', 'view',
@@ -107,8 +140,7 @@ function NodeRow({
             onContextMenu(node, path, e.clientX, e.clientY)
           }}
         >
-          {isFolder && <span className="tree-ico folder" aria-hidden />}
-          {(node.kind === 'schema' || node.kind === 'database') && <span className="tree-ico db" aria-hidden />}
+          <span className={`tree-ico ${icoClass(node)}`} aria-hidden />
           <span className="tree-name">
             {isFolder ? folderLabel(t, node.name) : node.name}
           </span>

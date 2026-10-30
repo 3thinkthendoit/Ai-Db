@@ -388,7 +388,7 @@ function App() {
     const tid = ensureTask(connId)
     if (!tid) throw new Error(t('agent.needConnect'))
     const prior = getTaskMessages(tid)
-    appendTaskMessages(tid, [{ role: 'user', content: prompt }], connId)
+    appendTaskMessages(tid, [{ role: 'user', content: prompt, createdAt: Date.now() }], connId)
     try {
       const res = await AgentChat({
         connectionId: connId,
@@ -398,7 +398,7 @@ function App() {
         preferredSchema: activeSchema || '',
       } as any)
       const final = String(res?.final || '')
-      appendTaskMessages(tid, [{ role: 'assistant', content: final }], connId)
+      appendTaskMessages(tid, [{ role: 'assistant', content: final, createdAt: Date.now() }], connId)
       return final
     } catch (e: any) {
       removeTaskUserMessage(tid, prompt)

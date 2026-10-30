@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from 'react'
+import { useDeferredValue, useEffect, useMemo, useRef, useState } from 'react'
+import logoSrc from '../assets/logo.svg'
 import { MarkdownBody } from '../components/MarkdownBody'
+import { historyBeforeIndex, isRetryableUserTurn } from '../lib/chatHistory'
 import { ChatMessage, Connection, LLMProfileView, StepEvent } from '../types'
 import {
   ActivateLLMProfile,
@@ -8,6 +10,7 @@ import {
   WritesAllowed,
 } from '../../wailsjs/go/main/App'
 import { useI18n } from '../i18n'
+import type { Locale } from '../locales'
 
 const TABS = [
   { id: 'query', labelKey: 'chat.tab.query' },
@@ -23,6 +26,53 @@ const CHIP_KEYS: Record<string, string[]> = {
 
 /** Empty-session intro: a few starter asks (local copy, no LLM). */
 const INTRO_CHIP_KEYS = ['tables', 'describe', 'nl', 'explain', 'slow'] as const
+
+/** Rough token estimate for context-ring UI (CJK denser than Latin). */
+function estimateTokens(text: string): number {
+  let cjk = 0
+  let other = 0
+  for (const ch of text) {
+    if (/[\u4e00-\u9fff\u3040-\u30ff\uac00-\ud7af]/.test(ch)) cjk++
+    else other++
+  }
+  return Math.max(0, Math.ceil(cjk / 1.5 + other / 4))
+}
+
+/** Default context window when profile has no explicit limit. */
+function contextWindowForModel(model: string): number {
+  const m = model.toLowerCase()
+  if (/gemini-2|claude-3|gpt-4\.1|o3|o4/.test(m)) return 200_000
+  if (/32k/.test(m)) return 32_000
+  if (/8k/.test(m)) return 8_192
+  return 128_000
+}
+
+function formatTokenCount(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+  if (n >= 10_000) return `${Math.round(n / 1000)}k`
+  if (n >= 1000) return `${(n / 1000).toFixed(1)}k`
+  return String(n)
+}
+
+function pad2(n: number) {
+  return n < 10 ? `0${n}` : String(n)
+}
+
+function formatMsgTime(ts: number | undefined, locale: Locale): string {
+  if (!ts) return ''
+  const d = new Date(ts)
+  if (Number.isNaN(d.getTime())) return ''
+  if (locale === 'zh') {
+    return `${d.getMonth() + 1}月${d.getDate()}日 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`
+  }
+  return d.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })
+}
+
+function profileAvatarLetter(p: { name?: string; model?: string }): string {
+  const raw = (p.name || p.model || '?').trim()
+  const ch = raw.charAt(0)
+  return ch ? ch.toUpperCase() : '?'
+}
 
 interface Props {
   taskId: string
@@ -49,7 +99,7 @@ interface Props {
 }
 
 export function AgentWorkspace(props: Props) {
-  const { t } = useI18n()
+  const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
   const [activeTab, setActiveTab] = useState<string>('query')
   const [steps, setSteps] = useState<StepEvent[]>([])
@@ -100,6 +150,29 @@ export function AgentWorkspace(props: Props) {
     })),
     [t]
   )
+
+  const activeProfile = useMemo(() => profiles.find((p) => p.active) || null, [profiles])
+  const modelDisplay = useMemo(() => {
+    if (!activeProfile) return modelLabel || t('chat.noModel')
+    const name = (activeProfile.name || '').trim()
+    const model = (activeProfile.model || '').trim()
+    if (name && model && name !== model) return `${name} · ${model}`
+    return model || name || t('chat.noModel')
+  }, [activeProfile, modelLabel, t])
+  const modelAvatar = useMemo(() => {
+    const raw = (activeProfile?.name || activeProfile?.model || modelLabel || '?').trim()
+    const ch = raw.charAt(0)
+    return ch ? ch.toUpperCase() : '?'
+  }, [activeProfile, modelLabel])
+  const deferredDraft = useDeferredValue(draft)
+  const deferredHistory = useDeferredValue(props.history)
+  const contextUsage = useMemo(() => {
+    const histText = deferredHistory.map((m) => m.content || '').join('\n')
+    const used = estimateTokens(histText) + estimateTokens(deferredDraft)
+    const windowSize = contextWindowForModel(activeProfile?.model || '')
+    const pct = windowSize > 0 ? Math.min(100, (used / windowSize) * 100) : 0
+    return { used, windowSize, pct }
+  }, [deferredHistory, deferredDraft, activeProfile])
 
   useEffect(() => {
     void reloadModels()
@@ -206,7 +279,8 @@ export function AgentWorkspace(props: Props) {
       }
 
       const priorHistory = props.onGetHistory(taskId)
-      props.onAppendMessages(taskId, [{ role: 'user', content: text }], connId)
+      const now = Date.now()
+      props.onAppendMessages(taskId, [{ role: 'user', content: text, createdAt: now }], connId)
       setDraft('')
       try {
         const res = await AgentChat({
@@ -218,7 +292,7 @@ export function AgentWorkspace(props: Props) {
         } as any)
         props.onAppendMessages(
           taskId,
-          [{ role: 'assistant', content: res.final || '' }],
+          [{ role: 'assistant', content: res.final || '', createdAt: Date.now() }],
           connId,
         )
         setSteps((res.steps || []) as StepEvent[])
@@ -232,27 +306,45 @@ export function AgentWorkspace(props: Props) {
     }
   }
 
+  async function copyMessage(content: string) {
+    try {
+      await navigator.clipboard.writeText(content)
+    } catch {
+      /* ignore */
+    }
+  }
+
+  /** Edit: drop this user turn and everything after, put text back in the composer. */
+  function editUserMessage(index: number) {
+    if (!isRetryableUserTurn(props.history, index) || busy) return
+    const m = props.history[index]
+    const taskId = props.taskId
+    if (taskId) {
+      props.onHistoryChangeFor(taskId, historyBeforeIndex(props.history, index))
+      setSteps([])
+      setError('')
+    }
+    setDraft(m.content)
+    inputEl.current?.focus()
+  }
+
+  /** Retry: truncate to before this turn, then re-send (no duplicate user bubble). */
+  function retryUserMessage(index: number) {
+    if (!isRetryableUserTurn(props.history, index) || busy || sendLock.current) return
+    const m = props.history[index]
+    const taskId = props.taskId
+    if (!taskId) return
+    props.onHistoryChangeFor(taskId, historyBeforeIndex(props.history, index))
+    setSteps([])
+    setError('')
+    void send(m.content)
+  }
+
   return (
     <div className={`chat${showHomeHero ? ' empty' : ''}`}>
       {conversing && (
         <div className="log archive">
           <div className="log-col">
-            {hasHistory && (
-              <div className="agent-header inline agent-header-actions">
-                <button
-                  type="button"
-                  className="sm"
-                  onClick={() => {
-                    const tid = props.taskId || props.onEnsureTask(props.connectionId || '')
-                    if (tid) props.onHistoryChangeFor(tid, [])
-                    setSteps([])
-                    setError('')
-                  }}
-                >
-                  {t('agent.clear')}
-                </button>
-              </div>
-            )}
             {!hasHistory && !busy && (
               <div className="agent-intro" role="status">
                 <div className="agent-intro-role">{t('chat.intro.role')}</div>
@@ -291,13 +383,64 @@ export function AgentWorkspace(props: Props) {
                 </div>
               </div>
             )}
-            {props.history.map((m, i) => (
-              <div key={i} className={`bubble ${m.role}`}>
-                <div className="bubble-role">{m.role}</div>
-                <MarkdownBody>{m.content}</MarkdownBody>
+            {props.history.map((m, i) => {
+              if (m.role === 'user') {
+                const timeLabel = formatMsgTime(m.createdAt, locale)
+                return (
+                  <div key={i} className="msg user">
+                    <div className="msg-user-bubble">
+                      <MarkdownBody>{m.content}</MarkdownBody>
+                    </div>
+                    <div className="msg-meta">
+                      {timeLabel && <span className="msg-time">{timeLabel}</span>}
+                      <div className="msg-actions">
+                        <button type="button" className="msg-action" title={t('chat.msg.copy')} onClick={() => void copyMessage(m.content)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                            <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                          </svg>
+                        </button>
+                        <button type="button" className="msg-action" title={t('chat.msg.retry')} disabled={busy} onClick={() => retryUserMessage(i)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M21 12a9 9 0 1 1-2.6-6.3M21 3v6h-6" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                        <button type="button" className="msg-action" title={t('chat.msg.edit')} disabled={busy} onClick={() => editUserMessage(i)}>
+                          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4 12.5-12.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              }
+              if (m.role !== 'assistant') return null
+              const outTokens = estimateTokens(m.content || '')
+              return (
+                <div key={i} className="msg assistant">
+                  <div className="msg-brand">
+                    <img className="msg-brand-logo" src={logoSrc} alt="" />
+                    <span className="msg-brand-name">{t('chat.title')}</span>
+                  </div>
+                  <div className="msg-assistant-body">
+                    <MarkdownBody>{m.content}</MarkdownBody>
+                  </div>
+                  {outTokens > 0 && (
+                    <div className="msg-token-badge">{t('chat.msg.outTokens', { n: outTokens })}</div>
+                  )}
+                </div>
+              )
+            })}
+            {busy && (
+              <div className="msg assistant">
+                <div className="msg-brand">
+                  <img className="msg-brand-logo" src={logoSrc} alt="" />
+                  <span className="msg-brand-name">{t('chat.title')}</span>
+                </div>
+                <div className="msg-assistant-body muted"><em>{t('agent.thinking')}</em></div>
               </div>
-            ))}
-            {busy && <div className="bubble assistant"><em>{t('agent.thinking')}</em></div>}
+            )}
             {steps.length > 0 && (
               <details className="steps" open={!busy}>
                 <summary>{t('agent.steps', { n: steps.length })}</summary>
@@ -417,10 +560,32 @@ export function AgentWorkspace(props: Props) {
                 </div>
               </div>
               <div className="composer-right">
+                <span
+                  className="ctx-usage"
+                  title={t('chat.model.contextTip', {
+                    pct: Math.round(contextUsage.pct),
+                    used: formatTokenCount(contextUsage.used),
+                    max: formatTokenCount(contextUsage.windowSize),
+                  })}
+                >
+                  <span className="ctx-ring" aria-hidden>
+                    <svg viewBox="0 0 20 20" width="16" height="16">
+                      <circle className="ctx-ring-track" cx="10" cy="10" r="7.5" />
+                      <circle
+                        className="ctx-ring-fill"
+                        cx="10"
+                        cy="10"
+                        r="7.5"
+                        pathLength="100"
+                        strokeDasharray={`${Math.max(contextUsage.pct, contextUsage.pct > 0 ? 2 : 0)} 100`}
+                      />
+                    </svg>
+                  </span>
+                </span>
                 <div className="host-menu-wrap model-menu-wrap" ref={modelMenuRoot}>
                   <button
                     type="button"
-                    className={`tool-pill model-pill${showModelPicker ? ' open' : ''}`}
+                    className={`model-select${showModelPicker ? ' open' : ''}`}
                     title={t('chat.model.switch')}
                     disabled={busy || modelBusy}
                     onClick={() => {
@@ -431,7 +596,8 @@ export function AgentWorkspace(props: Props) {
                       setShowModelPicker((v) => !v)
                     }}
                   >
-                    <span className="model-pill-label">{modelLabel || t('chat.noModel')}</span>
+                    <span className="model-avatar" aria-hidden>{modelAvatar}</span>
+                    <span className="model-select-label">{modelDisplay}</span>
                     <span className="caret-down">{showModelPicker ? '▴' : '▾'}</span>
                   </button>
                   {showModelPicker && (
@@ -439,39 +605,59 @@ export function AgentWorkspace(props: Props) {
                       {profiles.length === 0 ? (
                         <button
                           type="button"
-                          className="model-menu-item"
+                          className="model-menu-manage"
                           onClick={() => {
                             setShowModelPicker(false)
                             props.onGotoSettings?.()
                           }}
                         >
-                          {t('chat.model.manage')}
+                          <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                            <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                          </svg>
+                          {t('chat.model.configure')}
                         </button>
                       ) : (
                         <>
-                          {profiles.map((p) => (
-                            <button
-                              key={p.id}
-                              type="button"
-                              className={`model-menu-item${p.active ? ' on' : ''}`}
-                              disabled={modelBusy}
-                              onClick={() => void switchModel(p)}
-                            >
-                              <span className="model-menu-primary">{p.model || p.name}</span>
-                              {p.name && p.model && p.name !== p.model && (
-                                <span className="model-menu-secondary">{p.name}</span>
-                              )}
-                            </button>
-                          ))}
+                          <div className="model-picker-list">
+                            {profiles.map((p) => {
+                              const title = (p.name || p.model || t('chat.noModel')).trim()
+                              const sub = p.name && p.model && p.name !== p.model ? p.model : ''
+                              return (
+                                <button
+                                  key={p.id}
+                                  type="button"
+                                  className={`model-menu-row${p.active ? ' on' : ''}`}
+                                  disabled={modelBusy}
+                                  onClick={() => void switchModel(p)}
+                                >
+                                  <span className={`model-menu-avatar${p.active ? ' accent' : ''}`} aria-hidden>
+                                    {profileAvatarLetter(p)}
+                                  </span>
+                                  <span className="model-menu-text">
+                                    <span className="model-menu-title">{title}</span>
+                                    {sub ? <span className="model-menu-sub">{sub}</span> : null}
+                                  </span>
+                                  {p.active && (
+                                    <svg className="model-menu-check" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                                      <path d="M5 13l4 4L19 7" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round" />
+                                    </svg>
+                                  )}
+                                </button>
+                              )
+                            })}
+                          </div>
                           <button
                             type="button"
-                            className="model-menu-item model-menu-manage"
+                            className="model-menu-manage"
                             onClick={() => {
                               setShowModelPicker(false)
                               props.onGotoSettings?.()
                             }}
                           >
-                            {t('chat.model.manage')}
+                            <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                              <path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                            </svg>
+                            {t('chat.model.configure')}
                           </button>
                         </>
                       )}
@@ -485,7 +671,16 @@ export function AgentWorkspace(props: Props) {
                   title={t('chat.send')}
                   onClick={() => void send()}
                 >
-                  ↑
+                  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 19V5M5 12l7-7 7 7"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.4"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
                 </button>
               </div>
             </div>

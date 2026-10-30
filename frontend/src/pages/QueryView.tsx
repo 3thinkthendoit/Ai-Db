@@ -4,10 +4,20 @@ import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
 import { ObjectNode, QueryResult } from '../types'
-import { ExecuteQuery, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../../wailsjs/go/main/App'
+import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../../wailsjs/go/main/App'
 import { useI18n } from '../i18n'
 import { BodyPortal } from '../lib/portal'
-import { buildInserts, escLit, explainSql, formatSql, parseCsv, quoteIdent, quoteRedisArg, tableRef } from '../lib/querySql'
+import {
+  buildCopyToOtherDbSql,
+  buildInserts,
+  escLit,
+  explainSql,
+  formatSql,
+  parseCsv,
+  quoteIdent,
+  quoteRedisArg,
+  tableRef,
+} from '../lib/querySql'
 
 interface Props {
   /** False when Query panel is hidden — skip object-tree network work. */
@@ -37,6 +47,7 @@ type CtxAction =
   | 'modifyIndex'
   | 'dropIndex'
   | 'import'
+  | 'copyToOtherDb'
   | 'useSchema'
   | 'createTable'
   | 'createView'
@@ -61,6 +72,13 @@ interface ImportTarget {
   schema: string
   table: string
   ref: string
+}
+
+/** Prompt for same-connection force-overwrite copy to another schema. */
+interface CopyDbPrompt {
+  sourceSchema: string
+  /** Single table; omit for whole-schema (all tables under source). */
+  tableName?: string
 }
 
 interface EditorTab {
@@ -141,7 +159,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       if (connType === 'postgres') {
         items.push({ action: 'createSequence', labelKey: 'query.ctx.createSequence' })
       }
-      items.push({ sep: true }, copy)
+      items.push({ sep: true }, { action: 'copyToOtherDb', labelKey: 'query.ctx.copyToOtherDb' }, { sep: true }, copy)
       return items
     }
     case 'folder:tables':
@@ -207,6 +225,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
         { action: 'dropIndex', labelKey: 'query.ctx.dropIndex' },
         { sep: true },
         { action: 'import', labelKey: 'query.ctx.import' },
+        { action: 'copyToOtherDb', labelKey: 'query.ctx.copyToOtherDb' },
         { action: 'dropObject', labelKey: 'query.ctx.dropTable' },
         { sep: true },
         copy,
@@ -301,12 +320,22 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null)
   const [importCsv, setImportCsv] = useState('')
   const [importErr, setImportErr] = useState('')
+  const [copyDbPrompt, setCopyDbPrompt] = useState<CopyDbPrompt | null>(null)
+  const [copyDbTarget, setCopyDbTarget] = useState('')
+  const [copyDbErr, setCopyDbErr] = useState('')
+  const [copyDbBusy, setCopyDbBusy] = useState(false)
   const [splitPct, setSplitPct] = useState(50)
   const [sideWidth, setSideWidth] = useState(260)
   const menuRef = useRef<HTMLDivElement>(null)
   const editorPaneRef = useRef<HTMLElement>(null)
   const queryViewRef = useRef<HTMLDivElement>(null)
   const connRef = useRef(connectionId)
+  useEffect(() => {
+    setCopyDbPrompt(null)
+    setCopyDbTarget('')
+    setCopyDbErr('')
+    setCopyDbBusy(false)
+  }, [connectionId])
   const resultTabsRef = useRef(resultTabs)
   const resultCounterRef = useRef(resultCounter)
   const runningLockRef = useRef(false)
@@ -934,6 +963,19 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       return
     }
 
+    if (action === 'copyToOtherDb') {
+      if (connType === 'redis') return
+      const schema = schemaOf(path, node)
+      if (!schema) return
+      setCopyDbErr('')
+      setCopyDbTarget('')
+      setCopyDbPrompt({
+        sourceSchema: schema,
+        tableName: node.kind === 'table' ? node.name : undefined,
+      })
+      return
+    }
+
     const built = buildActionSql(action, node, path)
     if (!built) return
     if (built.mode === 'fill') fillSql(built.sql)
@@ -962,6 +1004,72 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     setImportTarget(null)
     setImportErr('')
     flash(t('query.import.filled'))
+  }
+
+  const copyDbSchemas = useMemo(() => {
+    if (!copyDbPrompt) return [] as string[]
+    return objects
+      .filter((n) => n.kind === 'schema' || n.kind === 'database')
+      .map((n) => n.name)
+      .filter((name) => name && name !== copyDbPrompt.sourceSchema)
+  }, [objects, copyDbPrompt])
+
+  async function applyCopyDb() {
+    if (!copyDbPrompt || copyDbBusy) return
+    const target = copyDbTarget.trim()
+    if (!target || target === copyDbPrompt.sourceSchema || !copyDbSchemas.includes(target)) {
+      setCopyDbErr(t('query.copyDb.needTarget'))
+      return
+    }
+    const runConn = connectionId
+    setCopyDbBusy(true)
+    setCopyDbErr('')
+    try {
+      let tables: string[] = []
+      if (copyDbPrompt.tableName) {
+        tables = [copyDbPrompt.tableName]
+      } else {
+        const kids = (await ExpandObject(runConn, [copyDbPrompt.sourceSchema, 'tables'])) as unknown as ObjectNode[]
+        if (connRef.current !== runConn) {
+          setCopyDbPrompt(null)
+          return
+        }
+        tables = (kids || []).filter((n) => n.kind === 'table' && n.name).map((n) => n.name)
+      }
+      if (connRef.current !== runConn) {
+        setCopyDbPrompt(null)
+        return
+      }
+      if (!tables.length) {
+        setCopyDbErr(t('query.copyDb.noTables'))
+        return
+      }
+      const sqlText = buildCopyToOtherDbSql(connType, copyDbPrompt.sourceSchema, target, tables, {
+        head: t('query.ctx.copyToOtherDbHint'),
+        oneByOne: t('query.ctx.migrateRunOneByOne'),
+        stepDrop: t('query.ctx.copyToOtherDbStepDrop'),
+        stepCreate: t('query.ctx.copyToOtherDbStepCreate'),
+        stepData: t('query.ctx.copyToOtherDbStepData'),
+        fkHint: t('query.ctx.copyToOtherDbFkHint'),
+      })
+      if (!sqlText) {
+        setCopyDbErr(t('query.copyDb.needTarget'))
+        return
+      }
+      setSql(sqlText)
+      setError('')
+      setCopyDbPrompt(null)
+      setCopyDbTarget('')
+      flash(t('query.copyDb.filled'))
+    } catch (e: any) {
+      if (connRef.current !== runConn) {
+        setCopyDbPrompt(null)
+        return
+      }
+      setCopyDbErr(String(e?.message || e))
+    } finally {
+      setCopyDbBusy(false)
+    }
   }
 
   const menuItems = useMemo(() => (ctx ? menuFor(connType, ctx.node) : []), [connType, ctx])
@@ -1271,6 +1379,70 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               <div className="modal-actions">
                 <button type="button" onClick={() => setImportTarget(null)}>{t('conn.form.cancel')}</button>
                 <button type="button" className="primary" onClick={applyImport}>{t('query.import.generate')}</button>
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      )}
+
+      {copyDbPrompt && (
+        <BodyPortal>
+          <div
+            className="modal-backdrop"
+            onMouseDown={(e) => {
+              if (e.target === e.currentTarget && !copyDbBusy) setCopyDbPrompt(null)
+            }}
+          >
+            <div className="modal copy-db-modal" role="dialog" aria-modal="true">
+              <div className="modal-head">
+                <h3>{t('query.copyDb.title')}</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={copyDbBusy}
+                  onClick={() => setCopyDbPrompt(null)}
+                  aria-label={t('modal.close')}
+                >
+                  ×
+                </button>
+              </div>
+              <p>
+                {t('query.copyDb.source', {
+                  source: copyDbPrompt.tableName
+                    ? `${copyDbPrompt.sourceSchema}.${copyDbPrompt.tableName}`
+                    : copyDbPrompt.sourceSchema,
+                })}
+              </p>
+              <p className="modal-hint">{t('query.copyDb.warn')}</p>
+              <label>
+                <span>{t('query.copyDb.target')}</span>
+                <select
+                  value={copyDbTarget}
+                  disabled={copyDbBusy || copyDbSchemas.length === 0}
+                  onChange={(e) => {
+                    setCopyDbTarget(e.target.value)
+                    setCopyDbErr('')
+                  }}
+                >
+                  <option value="">{t('query.copyDb.targetPick')}</option>
+                  {copyDbSchemas.map((name) => (
+                    <option key={name} value={name}>{name}</option>
+                  ))}
+                </select>
+              </label>
+              {copyDbSchemas.length === 0 && <p className="error-text">{t('query.copyDb.noSchemas')}</p>}
+              {copyDbBusy && <p className="muted">{t('query.copyDb.loading')}</p>}
+              {copyDbErr && <p className="error-text">{copyDbErr}</p>}
+              <div className="modal-actions">
+                <button type="button" disabled={copyDbBusy} onClick={() => setCopyDbPrompt(null)}>{t('conn.form.cancel')}</button>
+                <button
+                  type="button"
+                  className="primary"
+                  disabled={copyDbBusy || copyDbSchemas.length === 0}
+                  onClick={() => void applyCopyDb()}
+                >
+                  {t('query.copyDb.generate')}
+                </button>
               </div>
             </div>
           </div>
