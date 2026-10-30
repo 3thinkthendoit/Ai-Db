@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { MarkdownBody } from '../components/MarkdownBody'
 import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
@@ -17,7 +18,8 @@ interface Props {
   objects: ObjectNode[]
   activeSchema?: string
   onRefreshObjects: () => void
-  onAskAgent: (sql: string) => void
+  /** Run AI analysis; return markdown. Also syncs into Agent task history. */
+  onAiAnalyze: (sql: string) => Promise<string>
   onActiveSchemaChange?: (schema: string) => void
 }
 
@@ -72,6 +74,10 @@ interface ResultTab {
   id: string
   title: string
   result: QueryResult | null
+  /** When set, bottom pane shows markdown instead of a result grid. */
+  kind?: 'table' | 'ai'
+  markdown?: string
+  loading?: boolean
 }
 
 let tabSeq = 1
@@ -90,11 +96,14 @@ function makeTab(connType: string, title: string): EditorTab {
   }
 }
 
-function makeResultTab(title: string): ResultTab {
+function makeResultTab(title: string, kind: 'table' | 'ai' = 'table'): ResultTab {
   return {
     id: `r-${Date.now()}-${resultSeq++}`,
     title,
     result: null,
+    kind,
+    markdown: '',
+    loading: false,
   }
 }
 
@@ -278,7 +287,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
   }
 }
 
-export function QueryView({ active = true, connectionId, connected, connType, objects, activeSchema = '', onRefreshObjects, onAskAgent, onActiveSchemaChange }: Props) {
+export function QueryView({ active = true, connectionId, connected, connType, objects, activeSchema = '', onRefreshObjects, onAiAnalyze, onActiveSchemaChange }: Props) {
   const { t } = useI18n()
   const [tabs, setTabs] = useState<EditorTab[]>(() => [makeTab(connType, 'Query 1')])
   const [activeTabId, setActiveTabId] = useState(() => '')
@@ -301,10 +310,12 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   const resultTabsRef = useRef(resultTabs)
   const resultCounterRef = useRef(resultCounter)
   const runningLockRef = useRef(false)
+  const aiLockRef = useRef(false)
+  const [aiBusy, setAiBusy] = useState(false)
   connRef.current = connectionId
   resultTabsRef.current = resultTabs
   resultCounterRef.current = resultCounter
-  const busy = runningTabId !== null
+  const busy = runningTabId !== null || aiBusy
 
   const resolvedActiveId = activeTabId && tabs.some((x) => x.id === activeTabId) ? activeTabId : tabs[0]?.id
   const activeTab = tabs.find((x) => x.id === resolvedActiveId) || tabs[0]
@@ -366,16 +377,57 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   function commitQueryResult(preferredId: string | undefined, result: QueryResult) {
     const list = resultTabsRef.current
     if (preferredId && list.some((x) => x.id === preferredId)) {
-      patchResultTab(preferredId, { result })
+      patchResultTab(preferredId, { result, kind: 'table', markdown: '', loading: false })
       setActiveResultId(preferredId)
       return
     }
     const n = resultCounterRef.current + 1
     resultCounterRef.current = n
     setResultCounter(n)
-    const tab = { ...makeResultTab(t('query.resultTabName', { n })), result }
+    const tab = { ...makeResultTab(t('query.resultTabName', { n }), 'table'), result }
     setResultTabs((prev) => [...prev, tab])
     setActiveResultId(tab.id)
+  }
+
+  function commitAiResult(markdown: string, loading: boolean) {
+    const list = resultTabsRef.current
+    const existing = list.find((x) => x.kind === 'ai')
+    if (existing) {
+      patchResultTab(existing.id, { markdown, loading, result: null, title: t('query.aiResultTab') })
+      setActiveResultId(existing.id)
+      return existing.id
+    }
+    const n = resultCounterRef.current + 1
+    resultCounterRef.current = n
+    setResultCounter(n)
+    const tab: ResultTab = {
+      ...makeResultTab(t('query.aiResultTab'), 'ai'),
+      markdown,
+      loading,
+    }
+    setResultTabs((prev) => [...prev, tab])
+    setActiveResultId(tab.id)
+    return tab.id
+  }
+
+  async function runAiAnalyze() {
+    const text = sql.trim()
+    if (!text || runningTabId !== null || aiLockRef.current) return
+    aiLockRef.current = true
+    setAiBusy(true)
+    setError('')
+    commitAiResult('', true)
+    try {
+      const md = await onAiAnalyze(text)
+      commitAiResult(md || '', false)
+    } catch (e: any) {
+      const msg = String(e?.message || e)
+      commitAiResult(`**Error**\n\n\`\`\`\n${msg}\n\`\`\``, false)
+      setError(msg)
+    } finally {
+      aiLockRef.current = false
+      setAiBusy(false)
+    }
   }
 
   function closeResultTab(id: string) {
@@ -1097,9 +1149,9 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
                 className="sm"
                 disabled={busy || !sql.trim()}
                 title={t('query.agentExplain')}
-                onClick={() => onAskAgent(sql.trim())}
+                onClick={() => void runAiAnalyze()}
               >
-                {t('query.agentExplain')}
+                {aiBusy ? t('query.aiAnalyzing') : t('query.agentExplain')}
               </button>
               <button type="button" className="primary" disabled={busy || !connected} onClick={() => void runSql(sql)}>
                 {runningTabId === activeTab?.id ? t('query.running') : t('query.run')}
@@ -1159,7 +1211,21 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               </button>
             </div>
           )}
-          <ResultTable result={result} />
+          {activeResultTab?.kind === 'ai' ? (
+            <div className="result-ai-wrap">
+              {activeResultTab.loading ? (
+                <div className="result-ai-loading muted">{t('query.aiAnalyzing')}</div>
+              ) : activeResultTab.markdown ? (
+                <div className="result-ai-body">
+                  <MarkdownBody>{activeResultTab.markdown}</MarkdownBody>
+                </div>
+              ) : (
+                <div className="result-empty">{t('query.resultEmpty')}</div>
+              )}
+            </div>
+          ) : (
+            <ResultTable result={result} />
+          )}
         </div>
       </section>
 

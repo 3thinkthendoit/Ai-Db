@@ -24,6 +24,7 @@ import {
   Task,
 } from './tasks'
 import {
+  AgentChat,
   Connect,
   DeleteConnection,
   ListConnections,
@@ -31,6 +32,7 @@ import {
   SetActiveSchema,
   TestConnection,
   UpsertConnection,
+  WritesAllowed,
 } from '../wailsjs/go/main/App'
 import { WindowSetTitle } from '../wailsjs/runtime/runtime'
 
@@ -59,12 +61,13 @@ function App() {
   const [showPickConnForQuery, setShowPickConnForQuery] = useState(false)
   const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>('agent')
   const [activeSchema, setActiveSchema] = useState('')
-  const [agentSeedTick, setAgentSeedTick] = useState(0)
-  const agentPendingRef = useRef('')
+  /** Source of truth for in-flight history reads; avoid `ref = state` each render (clobbers optimistic writes). */
+  const tasksRef = useRef(tasks)
   const [schemaMenuOpen, setSchemaMenuOpen] = useState(false)
   const schemaMenuRoot = useRef<HTMLDivElement>(null)
 
   const persistTasks = useCallback((next: Task[]) => {
+    tasksRef.current = next
     setTasks(next)
     saveTasks(next)
   }, [])
@@ -280,54 +283,127 @@ function App() {
   function ensureTask(connectionId: string): string {
     if (activeTask) {
       if (connectionId && activeTask.connectionId !== connectionId && activeTask.messages.length === 0) {
-        setTasks((prev) => {
-          const next = prev.map((task) =>
+        persistTasks(
+          tasksRef.current.map((task) =>
             task.id === activeTask.id ? touchTask(task, { connectionId }) : task
           )
-          saveTasks(next)
-          return next
-        })
+        )
         setActiveConnId(connectionId)
       }
       return activeTask.id
     }
     if (!connectionId) return ''
     const task = createTask('', connectionId)
-    setTasks((prev) => {
-      const next = normalizeTasks([task, ...prev])
-      saveTasks(next)
-      return next
-    })
+    persistTasks(normalizeTasks([task, ...tasksRef.current]))
     setActiveTaskId(task.id)
     saveActiveTaskId(task.id)
     setActiveConnId(connectionId)
     return task.id
   }
 
+  function upsertTaskMessages(list: Task[], taskId: string, history: ChatMessage[], connectionId?: string): Task[] {
+    const idx = list.findIndex((task) => task.id === taskId)
+    if (idx < 0) {
+      return normalizeTasks([
+        {
+          id: taskId,
+          name: '',
+          connectionId: connectionId || '',
+          updatedAt: new Date().toISOString(),
+          messages: history,
+        },
+        ...list,
+      ])
+    }
+    return list.map((task) =>
+      task.id === taskId ? touchTask(task, { messages: history }) : task
+    )
+  }
+
+  /** Replace task history (clear / absolute). Syncs tasksRef immediately. */
   function updateTaskHistoryFor(taskId: string, history: ChatMessage[], connectionId?: string) {
     if (!taskId) return
-    setTasks((prev) => {
-      const idx = prev.findIndex((task) => task.id === taskId)
-      let next: Task[]
-      if (idx < 0) {
-        next = normalizeTasks([
-          {
-            id: taskId,
-            name: '',
-            connectionId: connectionId || '',
-            updatedAt: new Date().toISOString(),
-            messages: history,
-          },
-          ...prev,
-        ])
-      } else {
-        next = prev.map((task) =>
-          task.id === taskId ? touchTask(task, { messages: history }) : task
-        )
+    persistTasks(upsertTaskMessages(tasksRef.current, taskId, history, connectionId))
+  }
+
+  function getTaskMessages(taskId: string): ChatMessage[] {
+    return tasksRef.current.find((task) => task.id === taskId)?.messages || []
+  }
+
+  /** Append without clobbering concurrent turns (Agent ↔ AI分析). */
+  function appendTaskMessages(taskId: string, messages: ChatMessage[], connectionId?: string) {
+    if (!taskId || messages.length === 0) return
+    const list = tasksRef.current
+    const existing = list.find((task) => task.id === taskId)
+    const prior = existing?.messages || []
+    persistTasks(
+      upsertTaskMessages(list, taskId, [...prior, ...messages], connectionId || existing?.connectionId)
+    )
+  }
+
+  /** Drop one user turn by content (last match); keeps messages after it. */
+  function removeTaskUserMessage(taskId: string, content: string) {
+    if (!taskId) return
+    const list = tasksRef.current
+    const existing = list.find((task) => task.id === taskId)
+    if (!existing) return
+    let idx = -1
+    for (let i = existing.messages.length - 1; i >= 0; i--) {
+      const m = existing.messages[i]
+      if (m.role === 'user' && m.content === content) {
+        idx = i
+        break
       }
-      saveTasks(next)
-      return next
-    })
+    }
+    if (idx < 0) return
+    const history = [...existing.messages.slice(0, idx), ...existing.messages.slice(idx + 1)]
+    persistTasks(upsertTaskMessages(list, taskId, history, existing.connectionId))
+  }
+
+  /** Query「AI分析」：留在结果区展示，同时把对话写入当前任务（Agent 模式可见）。 */
+  async function runAiAnalyze(sql: string): Promise<string> {
+    const prompt = t('query.agentExplainPrompt', { sql })
+    let connId = workConnId
+    if (!connId) {
+      if (connections.length === 1) connId = connections[0].id
+      else if (connections.length === 0) throw new Error(t('chat.pickConn.empty'))
+      else throw new Error(t('chat.pickConn.hint'))
+    }
+    if (!connectedIds.has(connId)) {
+      const ok = await handleConnect(connId)
+      if (!ok) throw new Error(t('agent.needConnect'))
+    }
+    let confirmWrites = false
+    try {
+      if (await WritesAllowed()) {
+        if (!window.confirm(t('agent.writeConfirm'))) {
+          throw new Error(t('query.aiCancelled'))
+        }
+        confirmWrites = true
+      }
+    } catch (e: any) {
+      if (String(e?.message || e) === t('query.aiCancelled')) throw e
+      /* read-only config */
+    }
+    const tid = ensureTask(connId)
+    if (!tid) throw new Error(t('agent.needConnect'))
+    const prior = getTaskMessages(tid)
+    appendTaskMessages(tid, [{ role: 'user', content: prompt }], connId)
+    try {
+      const res = await AgentChat({
+        connectionId: connId,
+        history: prior.map((m) => ({ role: m.role, content: m.content })),
+        message: prompt,
+        confirmWrites,
+        preferredSchema: activeSchema || '',
+      } as any)
+      const final = String(res?.final || '')
+      appendTaskMessages(tid, [{ role: 'assistant', content: final }], connId)
+      return final
+    } catch (e: any) {
+      removeTaskUserMessage(tid, prompt)
+      throw e
+    }
   }
 
   const workspaceHistory = activeTask?.messages || []
@@ -371,10 +447,12 @@ function App() {
               activeTaskId={activeTaskId}
               onOpen={(id) => selectTask(id)}
               onRename={(id, name) => {
-                persistTasks(tasks.map((task) => (task.id === id ? touchTask(task, { name }) : task)))
+                persistTasks(
+                  tasksRef.current.map((task) => (task.id === id ? touchTask(task, { name }) : task))
+                )
               }}
               onDelete={(id) => {
-                const next = tasks.filter((task) => task.id !== id)
+                const next = tasksRef.current.filter((task) => task.id !== id)
                 persistTasks(next)
                 if (activeTaskId === id) {
                   setActiveTaskId('')
@@ -513,17 +591,11 @@ function App() {
                   connectionName={activeConn?.name || ''}
                   preferredSchema={activeSchema}
                   history={workspaceHistory}
-                  seedTick={agentSeedTick}
-                  takePendingMessage={() => {
-                    const msg = agentPendingRef.current
-                    agentPendingRef.current = ''
-                    return msg
-                  }}
                   onSelectConnection={(id) => {
                     setBanner('')
                     setActiveConnId(id)
                     if (activeTask && activeTask.messages.length === 0) {
-                      persistTasks(tasks.map((task) =>
+                      persistTasks(tasksRef.current.map((task) =>
                         task.id === activeTask.id ? touchTask(task, { connectionId: id }) : task
                       ))
                     }
@@ -533,6 +605,9 @@ function App() {
                   onGotoConnections={() => setMode('connections')}
                   onGotoSettings={() => setMode('settings')}
                   onEnsureTask={ensureTask}
+                  onGetHistory={getTaskMessages}
+                  onAppendMessages={appendTaskMessages}
+                  onRemoveUserMessage={removeTaskUserMessage}
                   onHistoryChangeFor={updateTaskHistoryFor}
                 />
               </div>
@@ -546,12 +621,7 @@ function App() {
                   activeSchema={activeSchema}
                   onRefreshObjects={refreshObjects}
                   onActiveSchemaChange={setActiveSchema}
-                  onAskAgent={(sql) => {
-                    agentPendingRef.current = t('query.agentExplainPrompt', { sql })
-                    setAgentSeedTick((n) => n + 1)
-                    setMode('work')
-                    setWorkSurface('agent')
-                  }}
+                  onAiAnalyze={runAiAnalyze}
                 />
               </div>
             </div>

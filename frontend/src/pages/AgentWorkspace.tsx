@@ -32,9 +32,6 @@ interface Props {
   connectionName: string
   preferredSchema?: string
   history: ChatMessage[]
-  /** Bumps when Query seeds a message; consume via takePendingMessage (once). */
-  seedTick?: number
-  takePendingMessage?: () => string
   /** Bind connection id only — do not open the driver yet. */
   onSelectConnection: (id: string) => void
   /** Open driver; call on Send. Resolves true only when connected. */
@@ -43,6 +40,11 @@ interface Props {
   onGotoConnections: () => void
   onGotoSettings?: () => void
   onEnsureTask: (connectionId: string) => string
+  /** Live task messages (ref-backed); use for send so concurrent AI分析 is visible. */
+  onGetHistory: (taskId: string) => ChatMessage[]
+  onAppendMessages: (taskId: string, messages: ChatMessage[], connectionId?: string) => void
+  onRemoveUserMessage: (taskId: string, content: string) => void
+  /** Absolute replace (e.g. clear). Prefer append/remove for in-flight turns. */
   onHistoryChangeFor: (taskId: string, history: ChatMessage[], connectionId?: string) => void
 }
 
@@ -64,9 +66,6 @@ export function AgentWorkspace(props: Props) {
   const inputEl = useRef<HTMLTextAreaElement>(null)
   const prevTaskId = useRef(props.taskId)
   const sendLock = useRef(false)
-  /** Last seedTick whose pending message was fully handled (sent or empty). */
-  const lastConsumedSeedRef = useRef(0)
-  const [, bumpSeedUi] = useState(0)
 
   async function reloadModels() {
     try {
@@ -149,28 +148,6 @@ export function AgentWorkspace(props: Props) {
     setBusy(false)
   }, [props.taskId])
 
-  // Auto-send seeded message from Query → Agent 解释 (ref consume = StrictMode-safe).
-  // Suppress intro while seedTick is ahead of lastConsumed — avoids one-frame flash before busy.
-  useEffect(() => {
-    if (!props.seedTick || props.seedTick <= lastConsumedSeedRef.current) return
-    const msg = props.takePendingMessage?.()?.trim()
-    if (!msg) {
-      // StrictMode remount may see empty after the first invoke already started send.
-      if (!sendLock.current) {
-        lastConsumedSeedRef.current = props.seedTick
-        bumpSeedUi((n) => n + 1)
-      }
-      return
-    }
-    void send(msg).finally(() => {
-      lastConsumedSeedRef.current = props.seedTick || lastConsumedSeedRef.current
-      bumpSeedUi((n) => n + 1)
-    })
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per seedTick
-  }, [props.seedTick])
-
-  const seedInFlight = (props.seedTick || 0) > lastConsumedSeedRef.current
-
   function applyChip(prompt: string) {
     setDraft(prompt)
     inputEl.current?.focus()
@@ -228,9 +205,8 @@ export function AgentWorkspace(props: Props) {
         return
       }
 
-      const priorHistory = props.history
-      const nextHistory = [...priorHistory, { role: 'user' as const, content: text }]
-      props.onHistoryChangeFor(taskId, nextHistory, connId)
+      const priorHistory = props.onGetHistory(taskId)
+      props.onAppendMessages(taskId, [{ role: 'user', content: text }], connId)
       setDraft('')
       try {
         const res = await AgentChat({
@@ -240,14 +216,14 @@ export function AgentWorkspace(props: Props) {
           confirmWrites,
           preferredSchema: props.preferredSchema || '',
         } as any)
-        props.onHistoryChangeFor(
+        props.onAppendMessages(
           taskId,
-          [...nextHistory, { role: 'assistant', content: res.final || '' }],
+          [{ role: 'assistant', content: res.final || '' }],
           connId,
         )
         setSteps((res.steps || []) as StepEvent[])
       } catch (e: any) {
-        props.onHistoryChangeFor(taskId, priorHistory, connId)
+        props.onRemoveUserMessage(taskId, text)
         setError(String(e?.message || e))
       }
     } finally {
@@ -277,7 +253,7 @@ export function AgentWorkspace(props: Props) {
                 </button>
               </div>
             )}
-            {!hasHistory && !busy && !seedInFlight && (
+            {!hasHistory && !busy && (
               <div className="agent-intro" role="status">
                 <div className="agent-intro-role">{t('chat.intro.role')}</div>
                 <h3 className="agent-intro-title">{t('chat.intro.title')}</h3>
