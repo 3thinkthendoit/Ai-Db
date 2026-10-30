@@ -1,8 +1,9 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
+import { SqlEditor } from '../components/SqlEditor'
 import { ObjectNode, QueryResult } from '../types'
-import { ExecuteQuery, IsMutatingQuery, WritesAllowed } from '../../wailsjs/go/main/App'
+import { ExecuteQuery, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../../wailsjs/go/main/App'
 import { useI18n } from '../i18n'
 import { BodyPortal } from '../lib/portal'
 import { buildInserts, escLit, explainSql, formatSql, parseCsv, quoteIdent, quoteRedisArg, tableRef } from '../lib/querySql'
@@ -14,6 +15,7 @@ interface Props {
   connected: boolean
   connType: string
   objects: ObjectNode[]
+  activeSchema?: string
   onRefreshObjects: () => void
   onAskAgent: (sql: string) => void
   onActiveSchemaChange?: (schema: string) => void
@@ -264,7 +266,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
   }
 }
 
-export function QueryView({ active = true, connectionId, connected, connType, objects, onRefreshObjects, onAskAgent, onActiveSchemaChange }: Props) {
+export function QueryView({ active = true, connectionId, connected, connType, objects, activeSchema = '', onRefreshObjects, onAskAgent, onActiveSchemaChange }: Props) {
   const { t } = useI18n()
   const [tabs, setTabs] = useState<EditorTab[]>(() => [makeTab(connType, 'Query 1')])
   const [activeTabId, setActiveTabId] = useState(() => '')
@@ -439,6 +441,14 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         if (!window.confirm(t('query.writeConfirm'))) {
           return
         }
+      }
+      // Apply workbench schema on the live session before execute (avoid Connect→effect race).
+      const schema = activeSchema.trim()
+      if (schema) {
+        try {
+          await SetActiveSchema(runConn, schema)
+        } catch { /* Execute may still work; surface driver errors from query */ }
+        if (connRef.current !== runConn) return
       }
       const res = await ExecuteQuery(runConn, nextSql)
       if (connRef.current !== runConn) return
@@ -784,6 +794,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           connectionId={connectionId}
           connected={connected}
           nodes={objects}
+          selectedSchema={activeSchema}
           onPick={onPick}
           onContextMenu={(node, path, x, y) => {
             const schema = schemaOf(path, node)
@@ -845,12 +856,19 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               +
             </button>
           </div>
-          <textarea
-            className="sql-editor"
+          <SqlEditor
             value={sql}
-            onChange={(e) => setSql(e.target.value)}
-            spellCheck={false}
+            onChange={setSql}
+            connType={connType}
+            connectionId={connectionId}
+            connected={connected}
+            objects={objects}
+            activeSchema={activeSchema}
+            disabled={busy}
             placeholder={connType === 'redis' ? t('query.placeholder.redis') : t('query.placeholder.sql')}
+            onRun={() => {
+              if (!busy && connected && sql.trim()) void runSql(sql)
+            }}
           />
           <div className="editor-toolbar">
             <div className="editor-toolbar-left">

@@ -3,6 +3,7 @@ import './App.css'
 import logoSrc from './assets/logo.svg'
 import { ConnectionForm } from './components/ConnectionForm'
 import { NewTaskModal } from './components/NewTaskModal'
+import { PickConnectionModal } from './components/PickConnectionModal'
 import { SettingsMenu } from './components/SettingsMenu'
 import { TasksSidebar } from './components/TasksSidebar'
 import { AgentWorkspace } from './pages/AgentWorkspace'
@@ -31,6 +32,7 @@ import {
   TestConnection,
   UpsertConnection,
 } from '../wailsjs/go/main/App'
+import { WindowSetTitle } from '../wailsjs/runtime/runtime'
 
 const NEW_TASK_ICON =
   'M4 6h11a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H9l-4 3v-3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3z M19 4v6 M16 7h6'
@@ -54,6 +56,7 @@ function App() {
     return ''
   })
   const [showNewTask, setShowNewTask] = useState(false)
+  const [showPickConnForQuery, setShowPickConnForQuery] = useState(false)
   const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>('agent')
   const [activeSchema, setActiveSchema] = useState('')
   const [agentSeedTick, setAgentSeedTick] = useState(0)
@@ -75,10 +78,31 @@ function App() {
     setWorkSurface('agent')
   }, [tasks])
 
+  function openQuerySurface(connectionId?: string) {
+    setMode('work')
+    setWorkSurface('sql')
+    if (connectionId) {
+      setActiveConnId(connectionId)
+      void handleConnect(connectionId)
+    }
+  }
+
+  /** Home / Settings → Query: bind a connection first when no task is open. */
+  function requestOpenQuery() {
+    if (activeTask) {
+      openQuerySurface(activeTask.connectionId)
+      return
+    }
+    if (connections.length === 0) {
+      setMode('connections')
+      return
+    }
+    setShowPickConnForQuery(true)
+  }
+
   function openWorkPage(page: AppMode) {
     if (page === 'query') {
-      setMode('work')
-      setWorkSurface('sql')
+      requestOpenQuery()
       return
     }
     setMode(page)
@@ -126,6 +150,19 @@ function App() {
     [connections, workConnId]
   )
 
+  // Native window title bar: "AI-DB — 未命名任务 · jd-test"
+  useEffect(() => {
+    if (typeof window === 'undefined' || !(window as unknown as { runtime?: unknown }).runtime) return
+    const base = 'AI-DB'
+    const name = activeTask?.name || (activeTask ? t('ss.unnamedTask') : '')
+    const title = !activeTask
+      ? base
+      : activeConn?.name
+        ? `${base} — ${name} · ${activeConn.name}`
+        : `${base} — ${name}`
+    WindowSetTitle(title)
+  }, [activeTask, activeConn, t])
+
   const refreshObjects = useCallback(async () => {
     if (!workConnId || !connectedIds.has(workConnId)) {
       setObjects([])
@@ -144,9 +181,9 @@ function App() {
     void refreshObjects()
   }, [refreshObjects])
 
-  // Workbench (Agent / Query) needs a live driver for the task connection.
+  // Query 需要对象树，进入 SQL 面再连；Agent 选节点不连，发送时再连。
   useEffect(() => {
-    if (mode !== 'work' || !workConnId || connectedIds.has(workConnId)) return
+    if (mode !== 'work' || workSurface !== 'sql' || !workConnId || connectedIds.has(workConnId)) return
     void handleConnect(workConnId)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [mode, workSurface, workConnId])
@@ -195,6 +232,14 @@ function App() {
       await Connect(id)
       setConnectedIds((prev) => new Set(prev).add(id))
       setActiveConnId(id)
+      // Apply known workbench schema immediately (Query/Agent before the options effect).
+      // Only when already validated against schemaOptions — avoid PG database-as-search_path.
+      const schema = activeSchema.trim()
+      if (schema && schemaOptions.includes(schema)) {
+        try {
+          await SetActiveSchema(id, schema)
+        } catch { /* effect retries when options settle */ }
+      }
       return true
     } catch (e: any) {
       setBanner(String(e?.message || e))
@@ -229,7 +274,7 @@ function App() {
     setMode('work')
     setWorkSurface('agent')
     setShowNewTask(false)
-    void handleConnect(connectionId)
+    // 不在创建时连接：等 Agent 首次发送再 Connect，避免选节点就报错横幅。
   }
 
   function ensureTask(connectionId: string): string {
@@ -430,7 +475,30 @@ function App() {
                   </div>
                   {hideTaskSidebar && (
                     <div className="work-bar-gear">
-                      <SettingsMenu activePage={menuActivePage} onPage={openWorkPage} />
+                      <button
+                        type="button"
+                        className="work-home-btn"
+                        title={t('work.home.hint')}
+                        onClick={() => {
+                          setMode('work')
+                          setWorkSurface('agent')
+                          setActiveTaskId('')
+                          saveActiveTaskId('')
+                          setSchemaMenuOpen(false)
+                        }}
+                      >
+                        <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
+                          <path
+                            d="M4 11.5 12 4l8 7.5 M7 10.5V20h10v-9.5"
+                            fill="none"
+                            stroke="currentColor"
+                            strokeWidth="1.7"
+                            strokeLinecap="round"
+                            strokeLinejoin="round"
+                          />
+                        </svg>
+                        <span>{t('work.home')}</span>
+                      </button>
                     </div>
                   )}
                 </div>
@@ -446,7 +514,6 @@ function App() {
                   connections={connections}
                   connectionName={activeConn?.name || ''}
                   preferredSchema={activeSchema}
-                  taskName={activeTask?.name || ''}
                   history={workspaceHistory}
                   seedTick={agentSeedTick}
                   takePendingMessage={() => {
@@ -454,17 +521,19 @@ function App() {
                     agentPendingRef.current = ''
                     return msg
                   }}
-                  onPickConnection={async (id) => {
+                  onSelectConnection={(id) => {
+                    setBanner('')
                     setActiveConnId(id)
                     if (activeTask && activeTask.messages.length === 0) {
                       persistTasks(tasks.map((task) =>
                         task.id === activeTask.id ? touchTask(task, { connectionId: id }) : task
                       ))
                     }
-                    return handleConnect(id)
                   }}
-                  onGotoQuery={() => setWorkSurface('sql')}
+                  onEnsureConnected={handleConnect}
+                  onGotoQuery={requestOpenQuery}
                   onGotoConnections={() => setMode('connections')}
+                  onGotoSettings={() => setMode('settings')}
                   onEnsureTask={ensureTask}
                   onHistoryChangeFor={updateTaskHistoryFor}
                 />
@@ -476,6 +545,7 @@ function App() {
                   connected={!!workConnId && connectedIds.has(workConnId)}
                   connType={activeConn?.type || 'mysql'}
                   objects={objects}
+                  activeSchema={activeSchema}
                   onRefreshObjects={refreshObjects}
                   onActiveSchemaChange={setActiveSchema}
                   onAskAgent={(sql) => {
@@ -509,6 +579,30 @@ function App() {
           defaultConnectionId={activeConnId || connections[0]?.id || ''}
           onClose={() => setShowNewTask(false)}
           onCreate={handleCreateTask}
+        />
+      )}
+
+      {showPickConnForQuery && (
+        <PickConnectionModal
+          connections={connections}
+          defaultConnectionId={activeConnId || connections[0]?.id || ''}
+          onClose={() => setShowPickConnForQuery(false)}
+          onManage={() => {
+            setShowPickConnForQuery(false)
+            setMode('connections')
+          }}
+          onPick={(id) => {
+            setShowPickConnForQuery(false)
+            // Reuse an empty unnamed task on the same connection to avoid sidebar spam.
+            const existing = tasks.find(
+              (task) => !task.name.trim() && task.connectionId === id && task.messages.length === 0
+            )
+            const task = existing || createTask('', id)
+            if (!existing) persistTasks([task, ...tasks])
+            setActiveTaskId(task.id)
+            saveActiveTaskId(task.id)
+            openQuerySurface(id)
+          }}
         />
       )}
 

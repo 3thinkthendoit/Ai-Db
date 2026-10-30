@@ -9,6 +9,8 @@ interface Props {
   connectionId: string
   connected: boolean
   nodes: ObjectNode[]
+  /** Work-bar selected database/schema — keep tree highlight in sync. */
+  selectedSchema?: string
   onPick: (node: ObjectNode, path: string[]) => void
   onContextMenu?: (node: ObjectNode, path: string[], clientX: number, clientY: number) => void
 }
@@ -73,7 +75,10 @@ function NodeRow({
 
   return (
     <li className={`tree-node depth-${Math.min(path.length, 6)}`}>
-      <div className={`tree-row${selected ? ' on' : ''}${isFolder ? ' folder' : ''}`}>
+      <div
+        className={`tree-row${selected ? ' on' : ''}${isFolder ? ' folder' : ''}`}
+        data-tree-key={key}
+      >
         {expandable ? (
           <button
             type="button"
@@ -139,8 +144,9 @@ function NodeRow({
   )
 }
 
-export function ObjectTree({ active = true, connectionId, connected, nodes, onPick, onContextMenu }: Props) {
+export function ObjectTree({ active = true, connectionId, connected, nodes, selectedSchema = '', onPick, onContextMenu }: Props) {
   const { t } = useI18n()
+  const rootRef = useRef<HTMLUListElement>(null)
   const [expanded, setExpanded] = useState<Set<string>>(() => new Set())
   const [childrenMap, setChildrenMap] = useState<Record<string, ObjectNode[]>>({})
   const [loading, setLoading] = useState<Set<string>>(() => new Set())
@@ -168,6 +174,41 @@ export function ObjectTree({ active = true, connectionId, connected, nodes, onPi
     setErrors({})
     setSelectedKey('')
   }, [connectionId])
+
+  // 顶栏切库：若当前选中已在该库下（含表/视图），保留；否则落到库节点。
+  // 勿在 nodes 刷新时把表高亮冲掉。
+  useEffect(() => {
+    const name = selectedSchema.trim()
+    if (!name) return
+    const hit = nodes.find((n) => (n.kind === 'schema' || n.kind === 'database') && n.name === name)
+    if (!hit) return
+    const key = pathKey([name])
+    setSelectedKey((prev) => {
+      if (prev === key || prev.startsWith(`${key}\0`)) return prev
+      return key
+    })
+  }, [selectedSchema, nodes, connectionId])
+
+  // 仅在「顶栏切到新库且高亮落在库节点」时滚动，避免点表/刷新时抢滚动。
+  const scrolledSchemaRef = useRef('')
+  useEffect(() => {
+    scrolledSchemaRef.current = ''
+  }, [connectionId])
+  useEffect(() => {
+    const name = selectedSchema.trim()
+    if (!name) return
+    const key = pathKey([name])
+    if (selectedKey !== key) {
+      if (selectedKey.startsWith(`${key}\0`)) scrolledSchemaRef.current = name
+      return
+    }
+    if (name === scrolledSchemaRef.current) return
+    scrolledSchemaRef.current = name
+    requestAnimationFrame(() => {
+      const el = rootRef.current?.querySelector(`[data-tree-key="${CSS.escape(key)}"]`)
+      el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' })
+    })
+  }, [selectedSchema, selectedKey])
 
   // 刷新对象列表：保留展开；先标 loading 再替换 children，避免闪「（空）」。
   useEffect(() => {
@@ -278,7 +319,7 @@ export function ObjectTree({ active = true, connectionId, connected, nodes, onPi
   }
 
   return (
-    <ul className="object-tree">
+    <ul className="object-tree" ref={rootRef}>
       {nodes.map((n) => (
         <NodeRow
           key={`${n.kind}:${n.name}`}

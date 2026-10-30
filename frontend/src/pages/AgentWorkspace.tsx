@@ -1,6 +1,12 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { ChatMessage, Connection, StepEvent } from '../types'
-import { AgentChat, GetLLMConfig, WritesAllowed } from '../../wailsjs/go/main/App'
+import { MarkdownBody } from '../components/MarkdownBody'
+import { ChatMessage, Connection, LLMProfileView, StepEvent } from '../types'
+import {
+  ActivateLLMProfile,
+  AgentChat,
+  ListLLMProfiles,
+  WritesAllowed,
+} from '../../wailsjs/go/main/App'
 import { useI18n } from '../i18n'
 
 const TABS = [
@@ -22,15 +28,17 @@ interface Props {
   connections: Connection[]
   connectionName: string
   preferredSchema?: string
-  taskName: string
   history: ChatMessage[]
   /** Bumps when Query seeds a message; consume via takePendingMessage (once). */
   seedTick?: number
   takePendingMessage?: () => string
-  /** Select + Connect; resolves true only when the connection is open. */
-  onPickConnection: (id: string) => Promise<boolean>
+  /** Bind connection id only — do not open the driver yet. */
+  onSelectConnection: (id: string) => void
+  /** Open driver; call on Send. Resolves true only when connected. */
+  onEnsureConnected: (id: string) => Promise<boolean>
   onGotoQuery: () => void
   onGotoConnections: () => void
+  onGotoSettings?: () => void
   onEnsureTask: (connectionId: string) => string
   onHistoryChangeFor: (taskId: string, history: ChatMessage[], connectionId?: string) => void
 }
@@ -43,12 +51,28 @@ export function AgentWorkspace(props: Props) {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [modelLabel, setModelLabel] = useState('')
+  const [profiles, setProfiles] = useState<LLMProfileView[]>([])
   const [showConnPicker, setShowConnPicker] = useState(false)
+  const [showModelPicker, setShowModelPicker] = useState(false)
+  const [modelBusy, setModelBusy] = useState(false)
   const chipScroll = useRef<HTMLDivElement>(null)
   const hostMenuRoot = useRef<HTMLDivElement>(null)
+  const modelMenuRoot = useRef<HTMLDivElement>(null)
   const inputEl = useRef<HTMLTextAreaElement>(null)
   const prevTaskId = useRef(props.taskId)
   const sendLock = useRef(false)
+
+  async function reloadModels() {
+    try {
+      const list = (await ListLLMProfiles()) as LLMProfileView[]
+      setProfiles(list || [])
+      const active = (list || []).find((p) => p.active)
+      setModelLabel(active?.model || active?.name || t('chat.noModel'))
+    } catch {
+      setProfiles([])
+      setModelLabel(t('chat.noModel'))
+    }
+  }
 
   const hasHistory = props.history.length > 0
   // 侧栏点进已有任务 = 对话模式（即使还没有气泡）；欢迎首页仅无任务时出现。
@@ -65,9 +89,8 @@ export function AgentWorkspace(props: Props) {
   )
 
   useEffect(() => {
-    void GetLLMConfig()
-      .then((c: any) => setModelLabel(c?.model ? String(c.model) : t('chat.noModel')))
-      .catch(() => setModelLabel(t('chat.noModel')))
+    void reloadModels()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [t])
 
   useEffect(() => {
@@ -75,10 +98,30 @@ export function AgentWorkspace(props: Props) {
       if (hostMenuRoot.current && !hostMenuRoot.current.contains(e.target as Node)) {
         setShowConnPicker(false)
       }
+      if (modelMenuRoot.current && !modelMenuRoot.current.contains(e.target as Node)) {
+        setShowModelPicker(false)
+      }
     }
     document.addEventListener('mousedown', onDoc)
     return () => document.removeEventListener('mousedown', onDoc)
   }, [])
+
+  async function switchModel(p: LLMProfileView) {
+    if (p.active || modelBusy) {
+      setShowModelPicker(false)
+      return
+    }
+    setModelBusy(true)
+    try {
+      await ActivateLLMProfile(p.id)
+      await reloadModels()
+      setShowModelPicker(false)
+    } catch (e: any) {
+      setError(String(e?.message || e))
+    } finally {
+      setModelBusy(false)
+    }
+  }
 
   // Reset local UI when switching tasks — but not home → first create (same send in flight).
   useEffect(() => {
@@ -135,8 +178,9 @@ export function AgentWorkspace(props: Props) {
 
       const alreadyLive = props.connected && connId === props.connectionId
       if (!alreadyLive) {
-        const ok = await props.onPickConnection(connId)
+        const ok = await props.onEnsureConnected(connId)
         if (!ok) {
+          // 顶部 banner 已有详细错误；本地再给一句提示。
           setError(t('agent.needConnect'))
           return
         }
@@ -190,12 +234,8 @@ export function AgentWorkspace(props: Props) {
       {conversing && (
         <div className="log archive">
           <div className="log-col">
-            <div className="agent-header inline">
-              <div>
-                <strong>{props.taskName || t('ss.unnamedTask')}</strong>
-                <span className="muted"> · {props.connectionName || t('agent.noConnection')}</span>
-              </div>
-              {hasHistory && (
+            {hasHistory && (
+              <div className="agent-header inline agent-header-actions">
                 <button
                   type="button"
                   className="sm"
@@ -208,15 +248,15 @@ export function AgentWorkspace(props: Props) {
                 >
                   {t('agent.clear')}
                 </button>
-              )}
-            </div>
+              </div>
+            )}
             {!hasHistory && !busy && (
               <div className="session-empty muted">{t('chat.sessionEmpty')}</div>
             )}
             {props.history.map((m, i) => (
               <div key={i} className={`bubble ${m.role}`}>
                 <div className="bubble-role">{m.role}</div>
-                <pre>{m.content}</pre>
+                <MarkdownBody>{m.content}</MarkdownBody>
               </div>
             ))}
             {busy && <div className="bubble assistant"><em>{t('agent.thinking')}</em></div>}
@@ -227,7 +267,7 @@ export function AgentWorkspace(props: Props) {
                   {steps.map((s, i) => (
                     <li key={i}>
                       <code>{s.kind}{s.name ? `:${s.name}` : ''}</code>
-                      <pre>{s.content}</pre>
+                      <MarkdownBody className="md-body-steps">{s.content}</MarkdownBody>
                     </li>
                   ))}
                 </ul>
@@ -326,7 +366,7 @@ export function AgentWorkspace(props: Props) {
                             type="button"
                             className={`model-menu-item${c.id === props.connectionId ? ' on' : ''}`}
                             onClick={() => {
-                              void props.onPickConnection(c.id)
+                              props.onSelectConnection(c.id)
                               setShowConnPicker(false)
                             }}
                           >
@@ -339,9 +379,67 @@ export function AgentWorkspace(props: Props) {
                 </div>
               </div>
               <div className="composer-right">
-                <span className="model-pill" title={modelLabel}>
-                  <span className="model-pill-label">{modelLabel || t('chat.noModel')}</span>
-                </span>
+                <div className="host-menu-wrap model-menu-wrap" ref={modelMenuRoot}>
+                  <button
+                    type="button"
+                    className={`tool-pill model-pill${showModelPicker ? ' open' : ''}`}
+                    title={t('chat.model.switch')}
+                    disabled={busy || modelBusy}
+                    onClick={() => {
+                      if (profiles.length === 0) {
+                        props.onGotoSettings?.()
+                        return
+                      }
+                      setShowModelPicker((v) => !v)
+                    }}
+                  >
+                    <span className="model-pill-label">{modelLabel || t('chat.noModel')}</span>
+                    <span className="caret-down">{showModelPicker ? '▴' : '▾'}</span>
+                  </button>
+                  {showModelPicker && (
+                    <div className="host-menu model-picker-menu" role="listbox">
+                      {profiles.length === 0 ? (
+                        <button
+                          type="button"
+                          className="model-menu-item"
+                          onClick={() => {
+                            setShowModelPicker(false)
+                            props.onGotoSettings?.()
+                          }}
+                        >
+                          {t('chat.model.manage')}
+                        </button>
+                      ) : (
+                        <>
+                          {profiles.map((p) => (
+                            <button
+                              key={p.id}
+                              type="button"
+                              className={`model-menu-item${p.active ? ' on' : ''}`}
+                              disabled={modelBusy}
+                              onClick={() => void switchModel(p)}
+                            >
+                              <span className="model-menu-primary">{p.model || p.name}</span>
+                              {p.name && p.model && p.name !== p.model && (
+                                <span className="model-menu-secondary">{p.name}</span>
+                              )}
+                            </button>
+                          ))}
+                          <button
+                            type="button"
+                            className="model-menu-item model-menu-manage"
+                            onClick={() => {
+                              setShowModelPicker(false)
+                              props.onGotoSettings?.()
+                            }}
+                          >
+                            {t('chat.model.manage')}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <button
                   type="button"
                   className="send-btn"
