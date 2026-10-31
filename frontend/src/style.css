@@ -29,6 +29,9 @@
   --db-redis: #fff;
   --db-redis-bg: #c0392b;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-size: 13px;
   color-scheme: light;
 }
 
@@ -62,6 +65,9 @@
   --db-redis-bg: #d94a4a;
   --row-alt: rgba(255, 255, 255, 0.03);
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Microsoft YaHei", sans-serif;
+  --font-size: 13px;
   color-scheme: dark;
 }
 
@@ -73,9 +79,8 @@ html, body, #root {
 }
 
 body {
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-    "Microsoft YaHei", sans-serif;
-  font-size: 13px;
+  font-family: var(--font-sans);
+  font-size: var(--font-size);
   color: var(--text);
   background: var(--bg);
   -webkit-font-smoothing: antialiased;
@@ -110,7 +115,8 @@ button.ghost:hover:not(:disabled) { background: var(--hover-overlay); }
 button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
 
 /* TablePlus-like light buttons — skip chrome/icon controls (send, twist, msg-action, …). */
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item) {
+/* Skip segmented prefs (pill-seg .on) and sidebar/nav chrome — they own their own chrome. */
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on) {
   font-weight: 500;
   border-radius: 6px;
   min-height: 28px;
@@ -120,27 +126,31 @@ button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
   color: var(--text);
   box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset;
 }
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):hover:not(:disabled) {
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):hover:not(:disabled) {
   background: #efefef;
   border-color: #bdbdbd;
 }
 [data-theme='light'] button.primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: #0070e8;
-  box-shadow: none;
+  background: #007aff !important;
+  color: #fff !important;
+  border-color: #0070e8 !important;
+  box-shadow: none !important;
   font-weight: 560;
 }
 [data-theme='light'] button.primary:hover:not(:disabled) {
-  background: #0066d6;
-  border-color: #0066d6;
+  background: #0066d6 !important;
+  border-color: #0066d6 !important;
   filter: none;
 }
 [data-theme='light'] button.danger {
-  background: #fff;
-  color: var(--danger);
-  border-color: color-mix(in srgb, var(--danger) 45%, var(--border));
-  box-shadow: none;
+  background: #fff !important;
+  color: var(--danger) !important;
+  border-color: color-mix(in srgb, var(--danger) 55%, #cfcfcf) !important;
+  box-shadow: none !important;
+}
+[data-theme='light'] button.danger:hover:not(:disabled) {
+  background: color-mix(in srgb, var(--danger) 8%, #fff) !important;
+  border-color: var(--danger) !important;
 }
 [data-theme='light'] button.ghost {
   background: transparent;

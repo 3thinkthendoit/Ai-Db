@@ -25,19 +25,53 @@ export async function buildSqlCompletionSchema(
   rootObjects: ObjectNode[],
   activeSchema: string,
 ): Promise<SQLNamespace> {
-  if (!connectionId || connType === 'redis') return {}
+  if (!connectionId || connType === 'redis' || connType === 'mongo') return {}
 
-  const schemas = rootObjects
+  const catalogs = rootObjects
     .filter((n) => n.kind === 'schema' || n.kind === 'database')
     .map((n) => n.name)
     .filter(Boolean)
 
-  // Only the workbench schema (or first root) — avoid N-schema ExpandObject storms.
   const focus =
-    activeSchema && schemas.includes(activeSchema)
+    activeSchema && catalogs.includes(activeSchema)
       ? activeSchema
-      : schemas[0] || ''
+      : catalogs[0] || ''
   if (!focus) return {}
+
+  // PostgreSQL roots are databases; tables live under [db, schema, tables].
+  if (connType === 'postgres') {
+    const schemaNodes = await expand(connectionId, [focus])
+    const schemaNames = schemaNodes.filter((n) => n.kind === 'schema').map((n) => n.name)
+    const ns = schemaNames.includes('public') ? 'public' : schemaNames[0]
+    if (!ns) return {}
+
+    const [tableNodes, viewNodes] = await Promise.all([
+      expand(connectionId, [focus, ns, 'tables']),
+      expand(connectionId, [focus, ns, 'views']),
+    ])
+    const relations = [...tableNodes, ...viewNodes]
+      .filter((n) => n.kind === 'table' || n.kind === 'view')
+      .slice(0, MAX_TABLES)
+
+    const tables: Record<string, string[]> = {}
+    for (const rel of relations) tables[rel.name] = []
+
+    await Promise.all(
+      relations.slice(0, MAX_COLS_TABLES).map(async (rel) => {
+        const folder = rel.kind === 'view' ? 'views' : 'tables'
+        await expand(connectionId, [focus, ns, folder, rel.name])
+        const colNodes = await expand(connectionId, [focus, ns, folder, rel.name, 'columns'])
+        tables[rel.name] = colNodes
+          .filter((n) => n.kind === 'column')
+          .map((n) => colName(n.name))
+          .filter(Boolean)
+      }),
+    )
+
+    const out: Record<string, SQLNamespace> = { [ns]: tables, [focus]: tables }
+    Object.assign(out, tables)
+    return out
+  }
 
   await expand(connectionId, [focus])
   const [tableNodes, viewNodes] = await Promise.all([
@@ -67,7 +101,6 @@ export async function buildSqlCompletionSchema(
   )
 
   const out: Record<string, SQLNamespace> = { [focus]: tables }
-  // Unqualified completion for the active schema.
   Object.assign(out, tables)
   return out
 }

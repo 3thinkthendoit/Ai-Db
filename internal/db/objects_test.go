@@ -2,6 +2,8 @@ package db
 
 import (
 	"context"
+	"database/sql"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -66,10 +68,10 @@ func TestMySQLExpandObjectPathNoDB(t *testing.T) {
 }
 
 func TestPostgresExpandObjectPathNoDB(t *testing.T) {
-	d := &postgresDriver{}
+	d := &postgresDriver{activeDB: "appdb"}
 	ctx := context.Background()
 
-	folders, err := d.ExpandObject(ctx, []string{"public"})
+	folders, err := d.ExpandObject(ctx, []string{"appdb", "public"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -77,9 +79,19 @@ func TestPostgresExpandObjectPathNoDB(t *testing.T) {
 		t.Fatalf("schema expand: %+v", folders)
 	}
 
-	_, err = d.ExpandObject(ctx, []string{"public", CatEvents})
+	_, err = expandPostgresOn(ctx, nil, []string{"appdb", "public", CatEvents})
 	if err == nil {
 		t.Fatal("postgres should reject mysql-only events path")
+	}
+}
+
+func TestPostgresWithDBDoesNotSwitchActive(t *testing.T) {
+	d := &postgresDriver{activeDB: "live_db"}
+	_ = d.withDB(context.Background(), "other_db", func(dbx *sql.DB) error {
+		return fmt.Errorf("should not reach without a reachable server")
+	})
+	if d.activeDB != "live_db" {
+		t.Fatalf("activeDB mutated to %q", d.activeDB)
 	}
 }
 

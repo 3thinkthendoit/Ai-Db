@@ -92,9 +92,10 @@ export function TasksSidebar({ tasks, connections, activeTaskId, onOpen, onRenam
               <div className="ssb-group-head">
                 <span className="ssb-group-name">{g.conn?.name || t('ss.unknownConn')}</span>
                 <span className="ssb-group-meta mono">
-                  {g.conn ? `${g.conn.type} · ${g.conn.host}` : g.connectionId.slice(0, 8)}
+                  {g.conn
+                    ? `${g.conn.user ? `${g.conn.user}@` : ''}${g.conn.host}`
+                    : g.connectionId.slice(0, 8)}
                 </span>
-                <span className="ssb-group-count">{g.list.length}</span>
               </div>
               {g.list.map((task) => (
                 <div

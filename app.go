@@ -533,6 +533,9 @@ func (a *App) IsMutatingQuery(connectionID, query string) bool {
 	if c.Type == config.ConnRedis {
 		return db.EnsureRedisReadOnly(query, false) != nil
 	}
+	if c.Type == config.ConnMongo {
+		return db.MongoQueryMutating(query)
+	}
 	return db.EnsureReadOnly(query, false) != nil
 }
 

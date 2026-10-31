@@ -17,9 +17,12 @@ import (
 type Message struct {
 	Role       string     `json:"role"`
 	Content    string     `json:"content,omitempty"`
-	ToolCalls  []ToolCall `json:"tool_calls,omitempty"`
-	ToolCallID string     `json:"tool_call_id,omitempty"`
-	Name       string     `json:"name,omitempty"`
+	// ReasoningContent holds chain-of-thought from models that expose it
+	// (DeepSeek/GLM/Qwen-style reasoning_content / reasoning / thinking).
+	ReasoningContent string     `json:"reasoning_content,omitempty"`
+	ToolCalls        []ToolCall `json:"tool_calls,omitempty"`
+	ToolCallID       string     `json:"tool_call_id,omitempty"`
+	Name             string     `json:"name,omitempty"`
 }
 
 // ToolCall is an OpenAI tool call.
@@ -56,11 +59,67 @@ type chatRequest struct {
 
 type chatResponse struct {
 	Choices []struct {
-		Message Message `json:"message"`
+		Message messageWire `json:"message"`
 	} `json:"choices"`
 	Error *struct {
 		Message string `json:"message"`
 	} `json:"error,omitempty"`
+}
+
+// messageWire accepts alternate reasoning field names from various providers.
+type messageWire struct {
+	Role             string          `json:"role"`
+	Content          json.RawMessage `json:"content"`
+	ReasoningContent string          `json:"reasoning_content"`
+	Reasoning        string          `json:"reasoning"`
+	Thinking         string          `json:"thinking"`
+	ToolCalls        []ToolCall      `json:"tool_calls"`
+	ToolCallID       string          `json:"tool_call_id"`
+	Name             string          `json:"name"`
+}
+
+func (w messageWire) toMessage() Message {
+	m := Message{
+		Role:       w.Role,
+		Content:    decodeContentString(w.Content),
+		ToolCalls:  w.ToolCalls,
+		ToolCallID: w.ToolCallID,
+		Name:       w.Name,
+	}
+	switch {
+	case strings.TrimSpace(w.ReasoningContent) != "":
+		m.ReasoningContent = strings.TrimSpace(w.ReasoningContent)
+	case strings.TrimSpace(w.Reasoning) != "":
+		m.ReasoningContent = strings.TrimSpace(w.Reasoning)
+	case strings.TrimSpace(w.Thinking) != "":
+		m.ReasoningContent = strings.TrimSpace(w.Thinking)
+	}
+	return m
+}
+
+func decodeContentString(raw json.RawMessage) string {
+	if len(raw) == 0 || string(raw) == "null" {
+		return ""
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return s
+	}
+	// Multimodal content parts: concatenate text fields.
+	var parts []struct {
+		Type string `json:"type"`
+		Text string `json:"text"`
+	}
+	if err := json.Unmarshal(raw, &parts); err == nil {
+		var b strings.Builder
+		for _, p := range parts {
+			if p.Text != "" {
+				b.WriteString(p.Text)
+			}
+		}
+		return b.String()
+	}
+	return strings.Trim(string(raw), `"`)
 }
 
 // Client talks to an OpenAI-compatible Chat Completions API.
@@ -131,7 +190,7 @@ func (c *Client) Chat(ctx context.Context, messages []Message, tools []ToolSpec)
 	if len(parsed.Choices) == 0 {
 		return Message{}, fmt.Errorf("LLM returned no choices")
 	}
-	return parsed.Choices[0].Message, nil
+	return parsed.Choices[0].Message.toMessage(), nil
 }
 
 func truncate(s string, n int) string {

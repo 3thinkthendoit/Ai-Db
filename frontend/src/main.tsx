@@ -4,8 +4,10 @@ import './style.css'
 import App from './App'
 import { I18nProvider } from './i18n'
 import { initTheme } from './theme'
+import { initFontPrefs } from './fontPrefs'
 
 initTheme()
+initFontPrefs()
 
 const container = document.getElementById('root')
 const root = createRoot(container!)

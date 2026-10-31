@@ -47,9 +47,10 @@ type Driver interface {
 	Type() config.ConnType
 	// SetActiveSchema remembers the UI-selected database/schema for this open driver.
 	// MySQL: applied as USE on the same pooled conn as each Execute/Explain.
-	// Postgres: applied as SET search_path.
-	// Redis: applied as SELECT <db index>.
-	SetActiveSchema(schema string)
+	// Postgres: replaces the live pool with one connected to that database.
+	// Redis: replaces the live client with Options.DB set to the logical index.
+	// Mongo: updates the in-memory active database name (no reconnect).
+	SetActiveSchema(schema string) error
 }
 
 // Open creates a driver for the given connection profile.
@@ -61,6 +62,8 @@ func Open(ctx context.Context, c config.Connection) (Driver, error) {
 		return openPostgres(ctx, c)
 	case config.ConnRedis:
 		return openRedis(ctx, c)
+	case config.ConnMongo:
+		return openMongo(ctx, c)
 	default:
 		return nil, fmt.Errorf("unsupported connection type: %s", c.Type)
 	}

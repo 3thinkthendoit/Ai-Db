@@ -7,6 +7,7 @@ const (
 	ConnMySQL    ConnType = "mysql"
 	ConnPostgres ConnType = "postgres"
 	ConnRedis    ConnType = "redis"
+	ConnMongo    ConnType = "mongo"
 )
 
 // Connection is a saved database connection profile.
@@ -20,6 +21,11 @@ type Connection struct {
 	Password    string   `json:"password"`
 	PasswordSet bool     `json:"passwordSet,omitempty"`
 	Database    string   `json:"database"`
+	// AuthSource is MongoDB authentication database (e.g. admin). Empty → driver default.
+	AuthSource string `json:"authSource,omitempty"`
+	// SSLMode is PostgreSQL sslmode (disable/allow/prefer/require/verify-ca/verify-full).
+	// Empty → driver default (prefer).
+	SSLMode string `json:"sslMode,omitempty"`
 }
 
 // LLMProfile is one saved OpenAI-compatible endpoint/model/key set.
@@ -87,6 +93,8 @@ func DefaultPort(t ConnType) int {
 		return 5432
 	case ConnRedis:
 		return 6379
+	case ConnMongo:
+		return 27017
 	default:
 		return 0
 	}

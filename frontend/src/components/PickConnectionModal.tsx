@@ -5,7 +5,10 @@ import { BodyPortal } from '../lib/portal'
 
 interface Props {
   connections: Connection[]
+  /** 空字符串 = 不预选，须用户点选后才能确认。 */
   defaultConnectionId: string
+  hint: string
+  confirmLabel: string
   onClose: () => void
   onPick: (connectionId: string) => void
   onManage: () => void
@@ -15,6 +18,7 @@ function typeLabel(t: string) {
   if (t === 'mysql') return 'MySQL'
   if (t === 'postgres') return 'PostgreSQL'
   if (t === 'redis') return 'Redis'
+  if (t === 'mongo') return 'MongoDB'
   return t
 }
 
@@ -23,12 +27,21 @@ function addrLine(c: Connection) {
   return `${auth}${c.host}:${c.port}`
 }
 
-export function PickConnectionModal({ connections, defaultConnectionId, onClose, onPick, onManage }: Props) {
+export function PickConnectionModal({
+  connections,
+  defaultConnectionId,
+  hint,
+  confirmLabel,
+  onClose,
+  onPick,
+  onManage,
+}: Props) {
   const { t } = useI18n()
-  const [connectionId, setConnectionId] = useState(defaultConnectionId || connections[0]?.id || '')
+  // 不回落到 connections[0]：未选择时保持空。
+  const [connectionId, setConnectionId] = useState(defaultConnectionId || '')
 
   useEffect(() => {
-    setConnectionId(defaultConnectionId || connections[0]?.id || '')
+    setConnectionId(defaultConnectionId || '')
   }, [defaultConnectionId, connections])
 
   const canOpen = !!connectionId
@@ -45,7 +58,7 @@ export function PickConnectionModal({ connections, defaultConnectionId, onClose,
           <div className="modal-head">
             <div className="pick-conn-head-text">
               <h3 id="pick-conn-title">{t('work.pickConn.title')}</h3>
-              <p className="pick-conn-sub">{t('work.pickConn.hint')}</p>
+              <p className="pick-conn-sub">{hint}</p>
             </div>
             <button
               type="button"
@@ -105,7 +118,7 @@ export function PickConnectionModal({ connections, defaultConnectionId, onClose,
                   disabled={!canOpen}
                   onClick={() => onPick(connectionId)}
                 >
-                  {t('work.pickConn.open')}
+                  {confirmLabel}
                 </button>
               )}
             </div>

@@ -19,6 +19,7 @@ function typeLabel(t: string) {
   if (t === 'mysql') return 'MySQL'
   if (t === 'postgres') return 'PostgreSQL'
   if (t === 'redis') return 'Redis'
+  if (t === 'mongo') return 'MongoDB'
   return t
 }
 

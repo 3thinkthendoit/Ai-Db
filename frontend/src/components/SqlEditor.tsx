@@ -31,26 +31,29 @@ function dialectFor(connType: string) {
 const baseChrome = EditorView.theme({
   '&': {
     height: '100%',
-    fontSize: '13px',
+    maxHeight: '100%',
+    fontSize: 'var(--font-size)',
     backgroundColor: 'var(--surface)',
     color: 'var(--text)',
   },
   '.cm-scroller': {
     fontFamily: 'var(--mono)',
     lineHeight: '1.45',
+    overflowX: 'auto',
+    overflowY: 'auto',
   },
   '.cm-content': {
     padding: '12px 0',
     caretColor: 'var(--accent)',
   },
   '.cm-gutters': {
-    backgroundColor: 'var(--surface-2)',
+    backgroundColor: 'transparent',
     color: 'var(--text-3)',
     border: 'none',
-    borderRight: '1px solid var(--border)',
   },
   '.cm-activeLineGutter': {
-    backgroundColor: 'color-mix(in srgb, var(--accent-bg) 55%, var(--surface-2))',
+    backgroundColor: 'transparent',
+    color: 'var(--text-2)',
   },
   '.cm-activeLine': {
     backgroundColor: 'color-mix(in srgb, var(--hover-overlay) 80%, transparent)',
@@ -117,7 +120,7 @@ export function SqlEditor(props: Props) {
   }, [])
 
   useEffect(() => {
-    if (!connected || !connectionId || connType === 'redis') {
+    if (!connected || !connectionId || connType === 'redis' || connType === 'mongo') {
       setSchema({})
       return
     }
@@ -150,7 +153,7 @@ export function SqlEditor(props: Props) {
       EditorView.editable.of(!disabled),
     ]
 
-    if (connType === 'redis') return chrome
+    if (connType === 'redis' || connType === 'mongo') return chrome
 
     const sqlConf: SQLConfig = {
       dialect: dialectFor(connType),

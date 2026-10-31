@@ -102,7 +102,19 @@ let tabSeq = 1
 let resultSeq = 1
 
 function defaultSql(connType: string) {
-  return connType === 'redis' ? 'PING' : 'SELECT 1'
+  if (connType === 'redis') return 'PING'
+  if (connType === 'mongo') return 'show collections'
+  return 'SELECT 1'
+}
+
+function isNonSQL(connType: string) {
+  return connType === 'redis' || connType === 'mongo'
+}
+
+/** mongosh collection handle: bare ident or getCollection("…"). */
+function mongoColl(name: string) {
+  if (/^[A-Za-z_][\w$]*$/.test(name)) return `db.${name}`
+  return `db.getCollection(${JSON.stringify(name)})`
 }
 
 function makeTab(connType: string, title: string): EditorTab {
@@ -127,9 +139,32 @@ function makeResultTab(title: string, kind: 'table' | 'ai' = 'table'): ResultTab
 
 type MenuEntry = { action: CtxAction; labelKey: string } | { sep: true }
 
-function schemaOf(path: string[], node: ObjectNode) {
+/** SQL schema/namespace for DDL/DML (PG: path is [database, schema, …]). */
+function schemaOf(path: string[], node: ObjectNode, connType = '') {
+  if (node.kind === 'schema') return node.name
+  if (node.kind === 'database') return connType === 'postgres' ? 'public' : node.name
+  if (connType === 'postgres' && path.length >= 2) return path[1] || ''
+  return path[0] || ''
+}
+
+/** Workbench「当前库」value — PG uses database (path[0]), MySQL uses schema/database name. */
+function workbenchCatalog(path: string[], node: ObjectNode, connType: string) {
+  if (connType === 'postgres') {
+    if (node.kind === 'database') return node.name
+    return path[0] || ''
+  }
   if (node.kind === 'schema' || node.kind === 'database') return node.name
   return path[0] || ''
+}
+
+/** Table/view name from a tree path (PG nests schema under database). */
+function relationFromPath(path: string[], node: ObjectNode, connType: string) {
+  if (node.kind === 'table' || node.kind === 'view') return node.name
+  if (connType === 'postgres') {
+    // [db, schema, tables|views, table]
+    return path[3] || ''
+  }
+  return path[2] || ''
 }
 
 function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
@@ -139,6 +174,14 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
   switch (kind) {
     case 'schema':
     case 'database': {
+      if (connType === 'mongo') {
+        return [
+          { action: 'useSchema', labelKey: 'query.ctx.mongoUse' },
+          { action: 'select', labelKey: 'query.ctx.mongoShowCollections' },
+          { sep: true },
+          copy,
+        ]
+      }
       if (connType === 'redis') {
         return [
           { action: 'redisPing', labelKey: 'query.ctx.redisPing' },
@@ -159,7 +202,11 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       if (connType === 'postgres') {
         items.push({ action: 'createSequence', labelKey: 'query.ctx.createSequence' })
       }
-      items.push({ sep: true }, { action: 'copyToOtherDb', labelKey: 'query.ctx.copyToOtherDb' }, { sep: true }, copy)
+      // PG cross-database copy is not expressible as one-shot SQL; only allow schema↔schema within a DB.
+      if (!(connType === 'postgres' && node.kind === 'database')) {
+        items.push({ sep: true }, { action: 'copyToOtherDb', labelKey: 'query.ctx.copyToOtherDb' })
+      }
+      items.push({ sep: true }, copy)
       return items
     }
     case 'folder:tables':
@@ -212,7 +259,12 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       return [
         { action: 'select', labelKey: 'query.ctx.select' },
         { action: 'describe', labelKey: 'query.ctx.describe' },
-        ...(connType === 'mysql' ? [{ action: 'showCreate' as const, labelKey: 'query.ctx.showCreate' }] : []),
+        ...((connType === 'mysql' || connType === 'postgres')
+          ? [{
+              action: 'showCreate' as const,
+              labelKey: connType === 'postgres' ? 'query.ctx.showDefinition' : 'query.ctx.showCreate',
+            }]
+          : []),
         { action: 'showIndexes', labelKey: 'query.ctx.showIndexes' },
         { sep: true },
         { action: 'addColumn', labelKey: 'query.ctx.addColumn' },
@@ -234,7 +286,12 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       return [
         { action: 'select', labelKey: 'query.ctx.select' },
         { action: 'describe', labelKey: 'query.ctx.describe' },
-        ...(connType === 'mysql' ? [{ action: 'showCreate' as const, labelKey: 'query.ctx.showCreateView' }] : []),
+        ...((connType === 'mysql' || connType === 'postgres')
+          ? [{
+              action: 'showCreate' as const,
+              labelKey: connType === 'postgres' ? 'query.ctx.showDefinitionView' : 'query.ctx.showCreateView',
+            }]
+          : []),
         { sep: true },
         { action: 'dropObject', labelKey: 'query.ctx.dropView' },
         { sep: true },
@@ -243,7 +300,12 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
     case 'procedure':
       return [
         { action: 'callRoutine', labelKey: 'query.ctx.callProcedure' },
-        ...(connType === 'mysql' ? [{ action: 'showCreate' as const, labelKey: 'query.ctx.showCreateProcedure' }] : []),
+        ...((connType === 'mysql' || connType === 'postgres')
+          ? [{
+              action: 'showCreate' as const,
+              labelKey: connType === 'postgres' ? 'query.ctx.showDefinitionProcedure' : 'query.ctx.showCreateProcedure',
+            }]
+          : []),
         { sep: true },
         { action: 'dropObject', labelKey: 'query.ctx.dropProcedure' },
         { sep: true },
@@ -252,7 +314,12 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
     case 'function':
       return [
         { action: 'callRoutine', labelKey: 'query.ctx.callFunction' },
-        ...(connType === 'mysql' ? [{ action: 'showCreate' as const, labelKey: 'query.ctx.showCreateFunction' }] : []),
+        ...((connType === 'mysql' || connType === 'postgres')
+          ? [{
+              action: 'showCreate' as const,
+              labelKey: connType === 'postgres' ? 'query.ctx.showDefinitionFunction' : 'query.ctx.showCreateFunction',
+            }]
+          : []),
         { sep: true },
         { action: 'dropObject', labelKey: 'query.ctx.dropFunction' },
         { sep: true },
@@ -298,6 +365,14 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       return [
         { action: 'select', labelKey: 'query.ctx.redisGet' },
         { action: 'dropObject', labelKey: 'query.ctx.redisDel' },
+        { sep: true },
+        copy,
+      ]
+    case 'collection':
+      return [
+        { action: 'select', labelKey: 'query.ctx.mongoFind' },
+        { action: 'describe', labelKey: 'query.ctx.mongoIndexes' },
+        { action: 'dropObject', labelKey: 'query.ctx.mongoDrop' },
         { sep: true },
         copy,
       ]
@@ -547,6 +622,11 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       if (connRef.current !== runConn) return
       patchTab(tabId, { error: '' })
       commitQueryResult(preferredResultId, res as unknown as QueryResult)
+      // Keep work-bar schema in sync after mongosh `use <db>`.
+      if (connType === 'mongo') {
+        const useMatch = nextSql.trim().match(/^use\s+([A-Za-z_][\w$-]*)\s*;?\s*$/i)
+        if (useMatch) onActiveSchemaChange?.(useMatch[1])
+      }
       // 建表/删对象等写操作成功后刷新左侧对象树。
       if (mutating) onRefreshObjects()
     } catch (e: any) {
@@ -566,19 +646,24 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   }
 
   function onPick(node: ObjectNode, path: string[]) {
-    const schema = schemaOf(path, node)
-    if (schema) onActiveSchemaChange?.(schema)
+    const catalog = workbenchCatalog(path, node, connType)
+    if (catalog) onActiveSchemaChange?.(catalog)
     if (connType === 'redis') {
       if (node.kind === 'key') setSql(`GET ${quoteRedisArg(node.name)}`)
       return
     }
+    if (connType === 'mongo') {
+      if (node.kind === 'collection') setSql(`${mongoColl(node.name)}.find({}).limit(100)`)
+      return
+    }
     if (node.kind === 'table' || node.kind === 'view') {
+      const schema = schemaOf(path, node, connType)
       setSql(`SELECT * FROM ${tableRef(connType, schema || path[0] || '', node.name)} LIMIT 100`)
     }
   }
 
   function buildActionSql(action: CtxAction, node: ObjectNode, path: string[]): { mode: 'run' | 'fill'; sql: string } | null {
-    const schema = schemaOf(path, node)
+    const schema = schemaOf(path, node, connType)
     const qi = (n: string) => quoteIdent(connType, n)
     const hint = `-- ${t('query.ctx.editHint')}`
     const schemaRef = schema ? qi(schema) : ''
@@ -595,8 +680,15 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           return { mode: 'run', sql: `SELECT nextval('${escLit(schema)}.${escLit(node.name)}') AS next_value;` }
         }
         if (node.kind === 'key') return { mode: 'run', sql: `GET ${quoteRedisArg(node.name)}` }
+        if (node.kind === 'collection') return { mode: 'run', sql: `${mongoColl(node.name)}.find({}).limit(100)` }
+        if (connType === 'mongo' && (node.kind === 'database' || node.kind === 'schema')) {
+          return { mode: 'run', sql: 'show collections' }
+        }
         return { mode: 'run', sql: `SELECT * FROM ${tableRef(connType, schema, node.name)} LIMIT 100` }
       case 'describe':
+        if (node.kind === 'collection') {
+          return { mode: 'run', sql: `${mongoColl(node.name)}.getIndexes()` }
+        }
         if (connType === 'mysql') return { mode: 'run', sql: `DESCRIBE ${tableRef(connType, schema, node.name)}` }
         if (connType === 'postgres') {
           return {
@@ -622,6 +714,38 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         return null
       case 'showCreate': {
         const ref = tableRef(connType, schema, node.name)
+        if (connType === 'postgres') {
+          if (node.kind === 'view') {
+            return {
+              mode: 'run',
+              sql: `SELECT pg_get_viewdef('${escLit(schema)}.${escLit(node.name)}'::regclass, true) AS definition`,
+            }
+          }
+          if (node.kind === 'procedure' || node.kind === 'function') {
+            return {
+              mode: 'run',
+              sql:
+                `SELECT pg_get_functiondef(p.oid) AS definition ` +
+                `FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace ` +
+                `WHERE n.nspname = '${escLit(schema)}' AND p.proname = '${escLit(node.name)}'`,
+            }
+          }
+          // No stock SHOW CREATE TABLE — dump columns + indexdefs as a practical definition view.
+          return {
+            mode: 'run',
+            sql:
+              `SELECT 'COLUMN' AS part, c.column_name AS name, ` +
+              `c.data_type || CASE WHEN c.is_nullable = 'NO' THEN ' NOT NULL' ELSE '' END || ` +
+              `COALESCE(' DEFAULT ' || c.column_default, '') AS detail ` +
+              `FROM information_schema.columns c ` +
+              `WHERE c.table_schema = '${escLit(schema)}' AND c.table_name = '${escLit(node.name)}' ` +
+              `UNION ALL ` +
+              `SELECT 'INDEX', i.indexname, i.indexdef ` +
+              `FROM pg_indexes i ` +
+              `WHERE i.schemaname = '${escLit(schema)}' AND i.tablename = '${escLit(node.name)}' ` +
+              `ORDER BY 1, 2`,
+          }
+        }
         if (connType !== 'mysql') return null
         if (node.kind === 'view') return { mode: 'run', sql: `SHOW CREATE VIEW ${ref}` }
         if (node.kind === 'procedure') return { mode: 'run', sql: `SHOW CREATE PROCEDURE ${ref}` }
@@ -632,6 +756,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       }
       case 'useSchema':
         if (connType === 'mysql') return { mode: 'run', sql: `USE ${qi(node.name)}` }
+        if (connType === 'mongo') return { mode: 'run', sql: `use ${node.name}` }
         return null
       case 'createTable':
         return {
@@ -710,12 +835,13 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         }
         return null
       case 'addColumn': {
-        const ref = tableRef(connType, schema, node.kind === 'table' ? node.name : (path[2] || node.name))
+        const table = node.kind === 'table' ? node.name : relationFromPath(path, node, connType) || node.name
+        const ref = tableRef(connType, schema, table)
         if (connType === 'postgres') return { mode: 'fill', sql: `${hint}\nALTER TABLE ${ref} ADD COLUMN ${qi('new_col')} VARCHAR(64);` }
         return { mode: 'fill', sql: `${hint}\nALTER TABLE ${ref} ADD COLUMN ${qi('new_col')} VARCHAR(64) NULL;` }
       }
       case 'modifyColumn': {
-        const table = node.kind === 'column' ? (path[2] || '') : node.name
+        const table = node.kind === 'column' ? relationFromPath(path, node, connType) : node.name
         const col = node.kind === 'column' ? colName : 'col_name'
         const ref = tableRef(connType, schema, table)
         const curType =
@@ -755,7 +881,9 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         }
       }
       case 'migrateColumnExpand': {
-        const table = node.kind === 'column' ? (path[2] || '') : (node.kind === 'table' ? node.name : path[2] || '')
+        const table = node.kind === 'column'
+          ? relationFromPath(path, node, connType)
+          : (node.kind === 'table' ? node.name : relationFromPath(path, node, connType))
         const col = node.kind === 'column' ? colName : 'col_name'
         const ref = tableRef(connType, schema, table || 'table_name')
         const curType =
@@ -802,7 +930,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         }
       }
       case 'migrateTableCopy': {
-        const table = node.kind === 'table' ? node.name : (path[2] || 'table_name')
+        const table = node.kind === 'table' ? node.name : (relationFromPath(path, node, connType) || 'table_name')
         const ref = tableRef(connType, schema, table)
         const neuName = `${table}_new`
         const oldName = `${table}_old`
@@ -852,19 +980,21 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         }
       }
       case 'dropColumn': {
-        const table = node.kind === 'column' ? (path[2] || '') : node.name
+        const table = node.kind === 'column' ? relationFromPath(path, node, connType) : node.name
         const col = node.kind === 'column' ? colName : 'col_name'
         return { mode: 'fill', sql: `${hint}\nALTER TABLE ${tableRef(connType, schema, table)} DROP COLUMN ${qi(col)};` }
       }
       case 'createIndex': {
-        const table = node.kind === 'folder' ? (path[2] || '') : (node.kind === 'table' ? node.name : (path[2] || node.name))
+        const table = node.kind === 'folder'
+          ? relationFromPath(path, node, connType)
+          : (node.kind === 'table' ? node.name : (relationFromPath(path, node, connType) || node.name))
         const ref = tableRef(connType, schema, table)
         return { mode: 'fill', sql: `${hint}\nCREATE INDEX ${qi('idx_name')} ON ${ref} (${qi('col_name')});` }
       }
       case 'modifyIndex': {
         // Cannot ALTER index columns in place. Prefer create-temp → drop-old → rename
         // so the table is never without a covering index (same name cannot coexist).
-        const table = path[2] || ''
+        const table = relationFromPath(path, node, connType)
         const ref = tableRef(connType, schema, table)
         const m = node.name.match(/^(.*?)\s*\((.*)\)\s*$/)
         const idx = (m ? m[1] : indexName).trim() || 'idx_name'
@@ -906,7 +1036,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       }
       case 'dropIndex': {
         if (node.kind === 'index') {
-          const table = path[2] || ''
+          const table = relationFromPath(path, node, connType)
           if (connType === 'postgres') return { mode: 'fill', sql: `${hint}\nDROP INDEX IF EXISTS ${schema ? `${qi(schema)}.` : ''}${qi(indexName)};` }
           return { mode: 'fill', sql: `${hint}\nDROP INDEX ${qi(indexName)} ON ${tableRef(connType, schema, table)};` }
         }
@@ -917,6 +1047,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       case 'dropObject': {
         const ref = tableRef(connType, schema, node.name)
         if (node.kind === 'key') return { mode: 'fill', sql: `DEL ${quoteRedisArg(node.name)}` }
+        if (node.kind === 'collection') return { mode: 'fill', sql: `${hint}\n${mongoColl(node.name)}.drop()` }
         if (node.kind === 'table') return { mode: 'fill', sql: `${hint}\nDROP TABLE ${ref};` }
         if (node.kind === 'view') return { mode: 'fill', sql: `${hint}\nDROP VIEW ${ref};` }
         if (node.kind === 'procedure') return { mode: 'fill', sql: `${hint}\nDROP PROCEDURE ${ref};` }
@@ -955,7 +1086,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     }
 
     if (action === 'import') {
-      const schema = schemaOf(path, node)
+      const schema = schemaOf(path, node, connType)
       const ref = tableRef(connType, schema, node.name)
       setImportCsv('')
       setImportErr('')
@@ -964,13 +1095,18 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     }
 
     if (action === 'copyToOtherDb') {
-      if (connType === 'redis') return
-      const schema = schemaOf(path, node)
-      if (!schema) return
+      if (isNonSQL(connType)) return
+      if (connType === 'postgres' && node.kind === 'database') {
+        flash(t('query.copyDb.pgNoCrossDb'))
+        return
+      }
+      // MySQL: database name. PG: schema namespace within the current database.
+      const source = schemaOf(path, node, connType)
+      if (!source) return
       setCopyDbErr('')
       setCopyDbTarget('')
       setCopyDbPrompt({
-        sourceSchema: schema,
+        sourceSchema: source,
         tableName: node.kind === 'table' ? node.name : undefined,
       })
       return
@@ -1006,13 +1142,46 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     flash(t('query.import.filled'))
   }
 
-  const copyDbSchemas = useMemo(() => {
-    if (!copyDbPrompt) return [] as string[]
-    return objects
-      .filter((n) => n.kind === 'schema' || n.kind === 'database')
-      .map((n) => n.name)
-      .filter((name) => name && name !== copyDbPrompt.sourceSchema)
-  }, [objects, copyDbPrompt])
+  const [copyDbSchemaOptions, setCopyDbSchemaOptions] = useState<string[]>([])
+  useEffect(() => {
+    if (!copyDbPrompt || !connectionId) {
+      setCopyDbSchemaOptions([])
+      return
+    }
+    let cancelled = false
+    void (async () => {
+      if (connType === 'postgres') {
+        const db = activeSchema || objects.find((n) => n.kind === 'database')?.name || ''
+        if (!db) {
+          if (!cancelled) setCopyDbSchemaOptions([])
+          return
+        }
+        try {
+          const kids = (await ExpandObject(connectionId, [db])) as unknown as ObjectNode[]
+          if (cancelled) return
+          setCopyDbSchemaOptions(
+            (kids || [])
+              .filter((n) => n.kind === 'schema' && n.name && n.name !== copyDbPrompt.sourceSchema)
+              .map((n) => n.name),
+          )
+        } catch {
+          if (!cancelled) setCopyDbSchemaOptions([])
+        }
+        return
+      }
+      if (!cancelled) {
+        setCopyDbSchemaOptions(
+          objects
+            .filter((n) => n.kind === 'schema' || n.kind === 'database')
+            .map((n) => n.name)
+            .filter((name) => name && name !== copyDbPrompt.sourceSchema),
+        )
+      }
+    })()
+    return () => { cancelled = true }
+  }, [copyDbPrompt, connectionId, connType, activeSchema, objects])
+
+  const copyDbSchemas = copyDbSchemaOptions
 
   async function applyCopyDb() {
     if (!copyDbPrompt || copyDbBusy) return
@@ -1029,7 +1198,14 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       if (copyDbPrompt.tableName) {
         tables = [copyDbPrompt.tableName]
       } else {
-        const kids = (await ExpandObject(runConn, [copyDbPrompt.sourceSchema, 'tables'])) as unknown as ObjectNode[]
+        const tablePath = connType === 'postgres'
+          ? [activeSchema || objects.find((n) => n.kind === 'database')?.name || '', copyDbPrompt.sourceSchema, 'tables']
+          : [copyDbPrompt.sourceSchema, 'tables']
+        if (connType === 'postgres' && !tablePath[0]) {
+          setCopyDbErr(t('query.copyDb.needTarget'))
+          return
+        }
+        const kids = (await ExpandObject(runConn, tablePath)) as unknown as ObjectNode[]
         if (connRef.current !== runConn) {
           setCopyDbPrompt(null)
           return
@@ -1136,8 +1312,8 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           selectedSchema={activeSchema}
           onPick={onPick}
           onContextMenu={(node, path, x, y) => {
-            const schema = schemaOf(path, node)
-            if (schema) onActiveSchemaChange?.(schema)
+            const catalog = workbenchCatalog(path, node, connType)
+            if (catalog) onActiveSchemaChange?.(catalog)
             setCtx({ x, y, node, path })
           }}
         />
@@ -1204,7 +1380,13 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
             objects={objects}
             activeSchema={activeSchema}
             disabled={busy}
-            placeholder={connType === 'redis' ? t('query.placeholder.redis') : t('query.placeholder.sql')}
+            placeholder={
+              connType === 'redis'
+                ? t('query.placeholder.redis')
+                : connType === 'mongo'
+                  ? t('query.placeholder.mongo')
+                  : t('query.placeholder.sql')
+            }
             onRun={() => {
               if (!busy && connected && sql.trim()) void runSql(sql)
             }}
@@ -1217,7 +1399,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
             <div className="editor-toolbar-right">
               <button
                 type="button"
-                className="sm"
+                className="sm danger"
                 disabled={busy}
                 title={t('query.clear')}
                 onClick={() => {
@@ -1231,7 +1413,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               <button
                 type="button"
                 className="sm"
-                disabled={busy || !sql.trim() || connType === 'redis'}
+                disabled={busy || !sql.trim() || isNonSQL(connType)}
                 title={t('query.format')}
                 onClick={() => {
                   setSql(formatSql(sql))
@@ -1243,7 +1425,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               <button
                 type="button"
                 className="sm"
-                disabled={busy || !connected || !sql.trim() || connType === 'redis'}
+                disabled={busy || !connected || !sql.trim() || isNonSQL(connType)}
                 title={t('query.explain')}
                 onClick={() => {
                   const q = explainSql(sql)
@@ -1254,7 +1436,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               </button>
               <button
                 type="button"
-                className="sm"
+                className="sm ai-action"
                 disabled={busy || !sql.trim()}
                 title={t('query.agentExplain')}
                 onClick={() => void runAiAnalyze()}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 
 	"AI-DB/internal/config"
 	"AI-DB/internal/db"
@@ -29,10 +30,10 @@ func NewToolRunner(mgr *db.Manager, connID string, connType config.ConnType, all
 // Specs returns tool definitions for the current connection type.
 func (t *ToolRunner) Specs() []ToolSpec {
 	common := []ToolSpec{
-		fn("execute_query", "Execute a SQL statement or Redis command on the current connection. Respect read-only mode.", map[string]any{
+		fn("execute_query", t.executeQueryToolDesc(), map[string]any{
 			"type": "object",
 			"properties": map[string]any{
-				"query": map[string]any{"type": "string", "description": "SQL or Redis command"},
+				"query": map[string]any{"type": "string", "description": t.executeQueryArgDesc()},
 			},
 			"required": []string{"query"},
 		}),
@@ -62,9 +63,57 @@ func (t *ToolRunner) Specs() []ToolSpec {
 			}),
 		)
 	}
+	if t.connType == config.ConnMongo {
+		// Document console: catalog helpers only — no SQL EXPLAIN.
+		return append(common,
+			fn("list_schemas", "List MongoDB databases.", map[string]any{"type": "object", "properties": map[string]any{}}),
+			fn("list_tables", "List collections in a database (schema = database name).", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"schema": map[string]any{"type": "string", "description": "Database name"},
+				},
+			}),
+			fn("describe_table", "List indexes for a collection (schema = database, table = collection).", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"schema": map[string]any{"type": "string", "description": "Database name"},
+					"table":  map[string]any{"type": "string", "description": "Collection name"},
+				},
+				"required": []string{"table"},
+			}),
+		)
+	}
+	if t.connType == config.ConnPostgres {
+		return append(common,
+			fn("list_schemas", "List PostgreSQL databases (catalogs). These are NOT schema namespaces.", map[string]any{"type": "object", "properties": map[string]any{}}),
+			fn("list_tables", "List tables in a schema namespace. schema defaults to public. Pass database to inspect another PostgreSQL catalog temporarily (does not change the workbench DB).", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"schema":   map[string]any{"type": "string", "description": "Schema namespace (usually public)"},
+					"database": map[string]any{"type": "string", "description": "Optional other catalog to inspect (temporary; does not change workbench DB)"},
+				},
+			}),
+			fn("describe_table", "Describe columns of a table in a schema namespace (default public).", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"schema":   map[string]any{"type": "string", "description": "Schema namespace (usually public)"},
+					"table":    map[string]any{"type": "string"},
+					"database": map[string]any{"type": "string", "description": "Optional other catalog to inspect (temporary; does not change workbench DB)"},
+				},
+				"required": []string{"table"},
+			}),
+			fn("explain_plan", "Run EXPLAIN on a SQL query (ANALYZE is blocked in read-only mode).", map[string]any{
+				"type": "object",
+				"properties": map[string]any{
+					"query": map[string]any{"type": "string"},
+				},
+				"required": []string{"query"},
+			}),
+		)
+	}
 	return append(common,
-		fn("list_schemas", "List database schemas.", map[string]any{"type": "object", "properties": map[string]any{}}),
-		fn("list_tables", "List tables in a schema.", map[string]any{
+		fn("list_schemas", "List MySQL databases (schemas).", map[string]any{"type": "object", "properties": map[string]any{}}),
+		fn("list_tables", "List tables in a database/schema.", map[string]any{
 			"type": "object",
 			"properties": map[string]any{
 				"schema": map[string]any{"type": "string"},
@@ -88,6 +137,28 @@ func (t *ToolRunner) Specs() []ToolSpec {
 	)
 }
 
+func (t *ToolRunner) executeQueryToolDesc() string {
+	switch t.connType {
+	case config.ConnRedis:
+		return "Execute a Redis command on the current connection. Respect read-only mode."
+	case config.ConnMongo:
+		return "Execute a MongoDB command (mongosh-lite, e.g. db.coll.find({})) on the current connection. Respect read-only mode."
+	default:
+		return "Execute a SQL statement on the current connection. Respect read-only mode."
+	}
+}
+
+func (t *ToolRunner) executeQueryArgDesc() string {
+	switch t.connType {
+	case config.ConnRedis:
+		return "Redis command"
+	case config.ConnMongo:
+		return "MongoDB command"
+	default:
+		return "SQL statement"
+	}
+}
+
 func fn(name, desc string, params map[string]any) ToolSpec {
 	return ToolSpec{
 		Type: "function",
@@ -101,12 +172,6 @@ func fn(name, desc string, params map[string]any) ToolSpec {
 
 // Run executes a named tool with JSON arguments.
 func (t *ToolRunner) Run(ctx context.Context, name, argsJSON string) (string, error) {
-	drv, release, err := t.mgr.Acquire(t.connID)
-	if err != nil {
-		return "", err
-	}
-	defer release()
-
 	var args map[string]any
 	if argsJSON != "" {
 		_ = json.Unmarshal([]byte(argsJSON), &args)
@@ -114,6 +179,12 @@ func (t *ToolRunner) Run(ctx context.Context, name, argsJSON string) (string, er
 	if args == nil {
 		args = map[string]any{}
 	}
+
+	drv, release, err := t.mgr.Acquire(t.connID)
+	if err != nil {
+		return "", err
+	}
+	defer release()
 
 	switch name {
 	case "execute_query":
@@ -131,15 +202,23 @@ func (t *ToolRunner) Run(ctx context.Context, name, argsJSON string) (string, er
 		return mustJSON(schemas), nil
 	case "list_tables":
 		schema, _ := args["schema"].(string)
-		tables, err := drv.ListTables(ctx, schema)
+		if strings.TrimSpace(schema) == "" && t.connType == config.ConnPostgres {
+			schema = "public"
+		}
+		dbName, _ := args["database"].(string)
+		tables, err := listTablesMaybeCatalog(ctx, drv, strings.TrimSpace(dbName), schema)
 		if err != nil {
 			return "", err
 		}
 		return mustJSON(tables), nil
 	case "describe_table":
 		schema, _ := args["schema"].(string)
+		if strings.TrimSpace(schema) == "" && t.connType == config.ConnPostgres {
+			schema = "public"
+		}
 		table, _ := args["table"].(string)
-		res, err := drv.DescribeTable(ctx, schema, table)
+		dbName, _ := args["database"].(string)
+		res, err := describeTableMaybeCatalog(ctx, drv, strings.TrimSpace(dbName), schema, table)
 		if err != nil {
 			return "", err
 		}
@@ -179,6 +258,30 @@ func (t *ToolRunner) Run(ctx context.Context, name, argsJSON string) (string, er
 	default:
 		return "", fmt.Errorf("unknown tool: %s", name)
 	}
+}
+
+func listTablesMaybeCatalog(ctx context.Context, drv db.Driver, database, schema string) ([]string, error) {
+	if database != "" {
+		type catalogLister interface {
+			ListTablesInDatabase(ctx context.Context, database, schema string) ([]string, error)
+		}
+		if c, ok := drv.(catalogLister); ok {
+			return c.ListTablesInDatabase(ctx, database, schema)
+		}
+	}
+	return drv.ListTables(ctx, schema)
+}
+
+func describeTableMaybeCatalog(ctx context.Context, drv db.Driver, database, schema, table string) (*db.QueryResult, error) {
+	if database != "" {
+		type catalogDescriber interface {
+			DescribeTableInDatabase(ctx context.Context, database, schema, table string) (*db.QueryResult, error)
+		}
+		if c, ok := drv.(catalogDescriber); ok {
+			return c.DescribeTableInDatabase(ctx, database, schema, table)
+		}
+	}
+	return drv.DescribeTable(ctx, schema, table)
 }
 
 func redisKeys(ctx context.Context, drv db.Driver, pattern string, limit int64) ([]string, error) {

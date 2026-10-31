@@ -84,6 +84,29 @@ func rejectExplainAnalyze(normalized string) error {
 	return nil
 }
 
+// EnsureMongoReadOnly blocks mutating Mongo commands when writes are disabled.
+// Parse errors are returned as-is (not disguised as write blocks).
+func EnsureMongoReadOnly(query string, allowWrites bool) error {
+	op, err := parseMongoQuery(query)
+	if err != nil {
+		return err
+	}
+	if allowWrites || mongoOpIsReadOnly(op.Name) {
+		return nil
+	}
+	return fmt.Errorf("mongo write/admin command blocked (enable Allow Writes): %s", op.Name)
+}
+
+// MongoQueryMutating reports whether a parseable Mongo command is a write/admin op.
+// Unparseable input is not treated as mutating so the UI can surface the parse error.
+func MongoQueryMutating(query string) bool {
+	op, err := parseMongoQuery(query)
+	if err != nil {
+		return false
+	}
+	return !mongoOpIsReadOnly(op.Name)
+}
+
 // EnsureRedisReadOnly blocks mutating Redis commands when writes are disabled.
 func EnsureRedisReadOnly(cmd string, allowWrites bool) error {
 	if allowWrites {

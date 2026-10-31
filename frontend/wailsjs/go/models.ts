@@ -67,6 +67,7 @@ export namespace agent {
 	export class Message {
 	    role: string;
 	    content?: string;
+	    reasoning_content?: string;
 	    tool_calls?: ToolCall[];
 	    tool_call_id?: string;
 	    name?: string;
@@ -79,6 +80,7 @@ export namespace agent {
 	        if ('string' === typeof source) source = JSON.parse(source);
 	        this.role = source["role"];
 	        this.content = source["content"];
+	        this.reasoning_content = source["reasoning_content"];
 	        this.tool_calls = this.convertValues(source["tool_calls"], ToolCall);
 	        this.tool_call_id = source["tool_call_id"];
 	        this.name = source["name"];
@@ -154,6 +156,8 @@ export namespace config {
 	    password: string;
 	    passwordSet?: boolean;
 	    database: string;
+	    authSource?: string;
+	    sslMode?: string;
 	
 	    static createFrom(source: any = {}) {
 	        return new Connection(source);
@@ -170,6 +174,8 @@ export namespace config {
 	        this.password = source["password"];
 	        this.passwordSet = source["passwordSet"];
 	        this.database = source["database"];
+	        this.authSource = source["authSource"];
+	        this.sslMode = source["sslMode"];
 	    }
 	}
 	export class LLMConfig {

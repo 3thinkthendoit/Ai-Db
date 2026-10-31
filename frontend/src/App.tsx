@@ -2,7 +2,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import logoSrc from './assets/logo.svg'
 import { ConnectionForm } from './components/ConnectionForm'
-import { NewTaskModal } from './components/NewTaskModal'
 import { PickConnectionModal } from './components/PickConnectionModal'
 import { SettingsMenu } from './components/SettingsMenu'
 import { TasksSidebar } from './components/TasksSidebar'
@@ -39,6 +38,29 @@ import { WindowSetTitle } from '../wailsjs/runtime/runtime'
 const NEW_TASK_ICON =
   'M4 6h11a3 3 0 0 1 3 3v5a3 3 0 0 1-3 3H9l-4 3v-3H7a3 3 0 0 1-3-3V9a3 3 0 0 1 3-3z M19 4v6 M16 7h6'
 
+/** Redis catalog labels are numeric ("0"); accept legacy "db0" and blank → "0". */
+function redisSchemaLabel(raw: string | undefined | null): string {
+  const s = (raw || '').trim()
+  if (!s) return '0'
+  const m = /^db(\d+)$/i.exec(s)
+  if (m) return m[1]
+  return s
+}
+
+function preferSchemaForConn(conn: Connection | undefined, schemaOptions: string[]): string {
+  if (!conn) return schemaOptions[0] || ''
+  if (conn.type === 'redis') {
+    const prefer = redisSchemaLabel(conn.database)
+    if (schemaOptions.length === 0) return prefer
+    if (schemaOptions.includes(prefer)) return prefer
+    return schemaOptions[0] || prefer
+  }
+  const prefer = (conn.database || '').trim()
+  if (schemaOptions.length === 0) return prefer
+  if (prefer && schemaOptions.includes(prefer)) return prefer
+  return schemaOptions[0] || prefer
+}
+
 function App() {
   const { t } = useI18n()
   const [mode, setMode] = useState<AppMode>('work')
@@ -57,10 +79,14 @@ function App() {
     saveActiveTaskId('')
     return ''
   })
-  const [showNewTask, setShowNewTask] = useState(false)
-  const [showPickConnForQuery, setShowPickConnForQuery] = useState(false)
+  /** null | 进 Query 选库 | Agent 发送前选库 */
+  const [pickConnPurpose, setPickConnPurpose] = useState<null | 'query' | 'agent'>(null)
+  /** Agent 未选库发送时暂存文案，选完库后交回 AgentWorkspace 续发。 */
+  const [pendingAgentSend, setPendingAgentSend] = useState<string | null>(null)
   const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>('agent')
   const [activeSchema, setActiveSchema] = useState('')
+  /** Last schema successfully applied to the live driver (UI revert target). */
+  const appliedSchemaRef = useRef('')
   /** Source of truth for in-flight history reads; avoid `ref = state` each render (clobbers optimistic writes). */
   const tasksRef = useRef(tasks)
   const [schemaMenuOpen, setSchemaMenuOpen] = useState(false)
@@ -100,7 +126,7 @@ function App() {
       setMode('connections')
       return
     }
-    setShowPickConnForQuery(true)
+    setPickConnPurpose('query')
   }
 
   function openWorkPage(page: AppMode) {
@@ -116,8 +142,8 @@ function App() {
   const reload = useCallback(async () => {
     const list = (await ListConnections()) as unknown as Connection[]
     setConnections(list || [])
-    if (!activeConnId && list?.length) setActiveConnId(list[0].id)
-  }, [activeConnId])
+    // 不自动选第一个连接：首页 / 新建任务应为「未选择」，发送时再提示选库。
+  }, [])
 
   useEffect(() => {
     void reload().catch((e) => setBanner(String(e)))
@@ -204,30 +230,70 @@ function App() {
   useEffect(() => {
     if (!workConnId) {
       setActiveSchema('')
+      appliedSchemaRef.current = ''
       return
     }
     if (schemaOptions.length === 0) {
       // Objects still loading / empty — seed from connection default (App owns schema; QueryView must not clear).
-      setActiveSchema(activeConn?.database || '')
+      setActiveSchema(preferSchemaForConn(activeConn, []))
       return
     }
     setActiveSchema((prev) => {
       if (prev && schemaOptions.includes(prev)) return prev
-      const prefer = activeConn?.database || ''
-      if (prefer && schemaOptions.includes(prefer)) return prefer
-      return schemaOptions[0]
+      // Legacy Redis sessions may still hold "db0" while catalog lists "0".
+      if (activeConn?.type === 'redis' && prev) {
+        const n = redisSchemaLabel(prev)
+        if (schemaOptions.includes(n)) return n
+      }
+      return preferSchemaForConn(activeConn, schemaOptions)
     })
-  }, [workConnId, schemaOptions, activeConn?.database])
+  }, [workConnId, schemaOptions, activeConn])
 
-  // Push UI-selected schema into the live driver (USE / search_path / SELECT).
-  // Wait until schemaOptions is known so we don't apply a PG database name as search_path.
+  // Push UI-selected catalog into the live driver (MySQL USE / PG database switch / Redis Options.DB).
+  // Go Manager already waits ~3s for Expand/query refs; one short frontend retry is enough.
   useEffect(() => {
     if (!workConnId || !connectedIds.has(workConnId) || !activeSchema) return
     if (schemaOptions.length === 0 || !schemaOptions.includes(activeSchema)) return
-    void SetActiveSchema(workConnId, activeSchema).catch((e: any) => {
-      setBanner(String(e?.message || e))
-    })
-  }, [workConnId, connectedIds, activeSchema, schemaOptions])
+    const want = activeSchema
+    const connId = workConnId
+    let cancelled = false
+    void (async () => {
+      const trySwitch = () => SetActiveSchema(connId, want)
+      try {
+        await trySwitch()
+        if (cancelled) return
+        appliedSchemaRef.current = want
+        return
+      } catch (e: any) {
+        const msg = String(e?.message || e)
+        if (/connection busy/i.test(msg) && !cancelled) {
+          await new Promise((r) => setTimeout(r, 80))
+          if (cancelled) return
+          try {
+            await trySwitch()
+            if (cancelled) return
+            appliedSchemaRef.current = want
+            return
+          } catch (e2: any) {
+            if (cancelled) return
+            setBanner(String(e2?.message || e2))
+          }
+        } else if (!cancelled) {
+          setBanner(msg)
+        }
+      }
+      if (cancelled) return
+      // Revert to last successfully applied schema (not prefer===want no-op).
+      const fallback =
+        (appliedSchemaRef.current && schemaOptions.includes(appliedSchemaRef.current)
+          ? appliedSchemaRef.current
+          : preferSchemaForConn(activeConn, schemaOptions)) || ''
+      setActiveSchema((prev) => (prev === want ? fallback : prev))
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [workConnId, connectedIds, activeSchema, schemaOptions, activeConn])
 
   async function handleConnect(id: string): Promise<boolean> {
     setBanner('')
@@ -235,12 +301,11 @@ function App() {
       await Connect(id)
       setConnectedIds((prev) => new Set(prev).add(id))
       setActiveConnId(id)
-      // Apply known workbench schema immediately (Query/Agent before the options effect).
-      // Only when already validated against schemaOptions — avoid PG database-as-search_path.
       const schema = activeSchema.trim()
       if (schema && schemaOptions.includes(schema)) {
         try {
           await SetActiveSchema(id, schema)
+          appliedSchemaRef.current = schema
         } catch { /* effect retries when options settle */ }
       }
       return true
@@ -268,16 +333,21 @@ function App() {
     await reload()
   }
 
-  function handleCreateTask(name: string, connectionId: string) {
-    const task = createTask(name, connectionId)
-    persistTasks([task, ...tasks])
-    setActiveTaskId(task.id)
-    saveActiveTaskId(task.id)
-    setActiveConnId(connectionId)
+  /** 回软件首页：无任务 / 无预选连接；发送时再弹窗选库。 */
+  function goHomeClearConnection() {
+    setActiveTaskId('')
+    saveActiveTaskId('')
+    setActiveConnId('')
+    setActiveSchema('')
+    setSchemaMenuOpen(false)
+    setPickConnPurpose(null)
+    setPendingAgentSend(null)
     setMode('work')
     setWorkSurface('agent')
-    setShowNewTask(false)
-    // 不在创建时连接：等 Agent 首次发送再 Connect，避免选节点就报错横幅。
+  }
+
+  function handleNewTask() {
+    goHomeClearConnection()
   }
 
   function ensureTask(connectionId: string): string {
@@ -426,12 +496,8 @@ function App() {
           <nav className="sidebar-nav">
             <button
               type="button"
-              className={`nav-btn${showNewTask ? ' active' : ''}`}
-              onClick={() => {
-                setMode('work')
-                setWorkSurface('agent')
-                setShowNewTask(true)
-              }}
+              className="nav-btn"
+              onClick={handleNewTask}
             >
               <svg className="nav-icon" width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
                 <path d={NEW_TASK_ICON} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
@@ -482,13 +548,7 @@ function App() {
                       type="button"
                       className="work-home-btn"
                       title={t('work.home.hint')}
-                      onClick={() => {
-                        setMode('work')
-                        setWorkSurface('agent')
-                        setActiveTaskId('')
-                        saveActiveTaskId('')
-                        setSchemaMenuOpen(false)
-                      }}
+                      onClick={() => goHomeClearConnection()}
                     >
                       <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
                         <path
@@ -609,6 +669,12 @@ function App() {
                   onAppendMessages={appendTaskMessages}
                   onRemoveUserMessage={removeTaskUserMessage}
                   onHistoryChangeFor={updateTaskHistoryFor}
+                  onRequestPickConnection={(text) => {
+                    setPendingAgentSend(text)
+                    setPickConnPurpose('agent')
+                  }}
+                  pendingSendAfterPick={pendingAgentSend}
+                  onPendingSendConsumed={() => setPendingAgentSend(null)}
                 />
               </div>
               <div className={`work-surface-panel${workSurface === 'sql' ? '' : ' is-hidden'}`}>
@@ -641,26 +707,30 @@ function App() {
         {mode === 'settings' && <SettingsView />}
       </main>
 
-      {showNewTask && (
-        <NewTaskModal
-          connections={connections}
-          defaultConnectionId={activeConnId || connections[0]?.id || ''}
-          onClose={() => setShowNewTask(false)}
-          onCreate={handleCreateTask}
-        />
-      )}
-
-      {showPickConnForQuery && (
+      {pickConnPurpose && (
         <PickConnectionModal
           connections={connections}
-          defaultConnectionId={activeConnId || connections[0]?.id || ''}
-          onClose={() => setShowPickConnForQuery(false)}
+          defaultConnectionId={pickConnPurpose === 'query' ? (activeConnId || '') : ''}
+          hint={t(pickConnPurpose === 'agent' ? 'work.pickConn.hintAgent' : 'work.pickConn.hint')}
+          confirmLabel={t(pickConnPurpose === 'agent' ? 'work.pickConn.confirm' : 'work.pickConn.open')}
+          onClose={() => {
+            setPickConnPurpose(null)
+            setPendingAgentSend(null)
+          }}
           onManage={() => {
-            setShowPickConnForQuery(false)
+            setPickConnPurpose(null)
+            setPendingAgentSend(null)
             setMode('connections')
           }}
           onPick={(id) => {
-            setShowPickConnForQuery(false)
+            const purpose = pickConnPurpose
+            setPickConnPurpose(null)
+            if (purpose === 'agent') {
+              setActiveConnId(id)
+              // pendingAgentSend 留给 AgentWorkspace 在 connectionId 就绪后续发
+              return
+            }
+            setPendingAgentSend(null)
             // Reuse an empty unnamed task on the same connection to avoid sidebar spam.
             const existing = tasks.find(
               (task) => !task.name.trim() && task.connectionId === id && task.messages.length === 0

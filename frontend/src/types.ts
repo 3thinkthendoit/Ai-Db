@@ -1,4 +1,4 @@
-export type ConnType = 'mysql' | 'postgres' | 'redis'
+export type ConnType = 'mysql' | 'postgres' | 'redis' | 'mongo'
 export type AppMode = 'work' | 'query' | 'prefs' | 'connections' | 'settings'
 
 export interface Connection {
@@ -11,6 +11,10 @@ export interface Connection {
   password: string
   passwordSet?: boolean
   database: string
+  /** MongoDB authentication database (e.g. admin). */
+  authSource?: string
+  /** PostgreSQL sslmode; empty → prefer. */
+  sslMode?: string
 }
 
 export interface LLMConfig {
@@ -49,29 +53,35 @@ export interface ObjectNode {
   children?: ObjectNode[]
 }
 
-export interface ChatMessage {
-  role: 'user' | 'assistant' | 'system' | 'tool'
-  content: string
-  /** Epoch ms when the message was added (optional for older persisted turns). */
-  createdAt?: number
-}
-
 export interface StepEvent {
   kind: string
   name?: string
   content: string
 }
 
+export interface ChatMessage {
+  role: 'user' | 'assistant' | 'system' | 'tool'
+  content: string
+  /** Epoch ms when the message was added (optional for older persisted turns). */
+  createdAt?: number
+  /** Agent loop steps for this assistant turn (thinking / tool / tool_result). */
+  steps?: StepEvent[]
+  /** Model id/label shown under the brand for this turn. */
+  model?: string
+}
+
 export function emptyConnection(type: ConnType = 'mysql'): Connection {
-  const ports: Record<ConnType, number> = { mysql: 3306, postgres: 5432, redis: 6379 }
+  const ports: Record<ConnType, number> = { mysql: 3306, postgres: 5432, redis: 6379, mongo: 27017 }
   return {
     id: '',
     name: '',
     type,
     host: '127.0.0.1',
     port: ports[type],
-    user: type === 'redis' ? '' : 'root',
+    user: type === 'redis' ? '' : type === 'mongo' ? '' : 'root',
     password: '',
-    database: type === 'postgres' ? 'postgres' : type === 'redis' ? '0' : '',
+    database: type === 'postgres' ? 'postgres' : type === 'redis' ? '' : type === 'mongo' ? 'test' : '',
+    authSource: type === 'mongo' ? 'admin' : '',
+    sslMode: type === 'postgres' ? 'prefer' : '',
   }
 }

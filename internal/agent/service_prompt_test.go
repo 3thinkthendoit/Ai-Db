@@ -23,4 +23,13 @@ func TestBuildSystemPromptPreferredSchema(t *testing.T) {
 	if strings.Contains(empty, "User-selected database/schema:") {
 		t.Fatalf("blank preferred schema should be omitted, got:\n%s", empty)
 	}
+
+	redis := config.Connection{Name: "cache", Type: config.ConnRedis, Host: "127.0.0.1", Database: "0"}
+	rgot := buildSystemPrompt(redis, llm, "3")
+	if !strings.Contains(rgot, "User-selected Redis logical DB index: 3") {
+		t.Fatalf("expected redis logical DB line, got:\n%s", rgot)
+	}
+	if strings.Contains(rgot, "User-selected database/schema:") {
+		t.Fatalf("redis should not use MySQL schema wording, got:\n%s", rgot)
+	}
 }

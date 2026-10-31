@@ -11,6 +11,7 @@ import {
 } from '../../wailsjs/go/main/App'
 import { useI18n } from '../i18n'
 import type { Locale } from '../locales'
+import { sanitizeStepsForStorage } from '../tasks'
 
 const TABS = [
   { id: 'query', labelKey: 'chat.tab.query' },
@@ -74,6 +75,29 @@ function profileAvatarLetter(p: { name?: string; model?: string }): string {
   return ch ? ch.toUpperCase() : '?'
 }
 
+function thinkingFromSteps(steps: StepEvent[] | undefined): string {
+  if (!steps?.length) return ''
+  return steps
+    .filter((s) => s.kind === 'thinking' && s.content.trim())
+    .map((s) => s.content.trim())
+    .join('\n\n')
+}
+
+type ToolCallView = { name: string; args: string; result: string }
+
+function toolCallsFromSteps(steps: StepEvent[] | undefined): ToolCallView[] {
+  if (!steps?.length) return []
+  const out: ToolCallView[] = []
+  for (let i = 0; i < steps.length; i++) {
+    const s = steps[i]
+    if (s.kind !== 'tool') continue
+    const next = steps[i + 1]
+    const result = next?.kind === 'tool_result' ? next.content : ''
+    out.push({ name: s.name || 'tool', args: s.content || '', result })
+  }
+  return out
+}
+
 interface Props {
   taskId: string
   connectionId: string
@@ -96,26 +120,30 @@ interface Props {
   onRemoveUserMessage: (taskId: string, content: string) => void
   /** Absolute replace (e.g. clear). Prefer append/remove for in-flight turns. */
   onHistoryChangeFor: (taskId: string, history: ChatMessage[], connectionId?: string) => void
+  /** 未选库发送：打开 App 层选连接弹窗，并暂存待发文案。 */
+  onRequestPickConnection: (pendingText: string) => void
+  /** App 在用户确认选库后回传；有值且 connectionId 就绪时续发。 */
+  pendingSendAfterPick?: string | null
+  onPendingSendConsumed?: () => void
 }
 
 export function AgentWorkspace(props: Props) {
   const { t, locale } = useI18n()
   const [draft, setDraft] = useState('')
   const [activeTab, setActiveTab] = useState<string>('query')
-  const [steps, setSteps] = useState<StepEvent[]>([])
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [modelLabel, setModelLabel] = useState('')
   const [profiles, setProfiles] = useState<LLMProfileView[]>([])
-  const [showConnPicker, setShowConnPicker] = useState(false)
   const [showModelPicker, setShowModelPicker] = useState(false)
   const [modelBusy, setModelBusy] = useState(false)
   const chipScroll = useRef<HTMLDivElement>(null)
-  const hostMenuRoot = useRef<HTMLDivElement>(null)
   const modelMenuRoot = useRef<HTMLDivElement>(null)
   const inputEl = useRef<HTMLTextAreaElement>(null)
   const prevTaskId = useRef(props.taskId)
   const sendLock = useRef(false)
+  /** 防止 StrictMode / 重复 effect 对同一 pending 续发两次。 */
+  const resumedPendingKey = useRef('')
 
   async function reloadModels() {
     try {
@@ -181,9 +209,6 @@ export function AgentWorkspace(props: Props) {
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
-      if (hostMenuRoot.current && !hostMenuRoot.current.contains(e.target as Node)) {
-        setShowConnPicker(false)
-      }
       if (modelMenuRoot.current && !modelMenuRoot.current.contains(e.target as Node)) {
         setShowModelPicker(false)
       }
@@ -215,11 +240,26 @@ export function AgentWorkspace(props: Props) {
     if (prev === props.taskId) return
     prevTaskId.current = props.taskId
     if (!prev && props.taskId) return
-    setSteps([])
     setError('')
     setDraft('')
     setBusy(false)
   }, [props.taskId])
+
+  // 选库弹窗确认后：connectionId 已写入，续发暂存文案（ref 防双发）。
+  useEffect(() => {
+    const pending = props.pendingSendAfterPick
+    if (!pending) {
+      resumedPendingKey.current = ''
+      return
+    }
+    if (!props.connectionId) return
+    const key = `${props.connectionId}\0${pending}`
+    if (resumedPendingKey.current === key) return
+    resumedPendingKey.current = key
+    props.onPendingSendConsumed?.()
+    void send(pending)
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only resume when pick completes
+  }, [props.pendingSendAfterPick, props.connectionId])
 
   function applyChip(prompt: string) {
     setDraft(prompt)
@@ -237,18 +277,15 @@ export function AgentWorkspace(props: Props) {
     setError('')
 
     try {
-      let connId = props.connectionId
+      const connId = props.connectionId
       if (!connId) {
-        if (props.connections.length === 1) {
-          connId = props.connections[0].id
-        } else if (props.connections.length === 0) {
+        if (props.connections.length === 0) {
           setError(t('chat.pickConn.empty'))
-          return
         } else {
-          setShowConnPicker(true)
-          setError(t('chat.pickConn.hint'))
-          return
+          // 复用 App 层「选择连接」弹窗；选完后由 pendingSendAfterPick 续发。
+          props.onRequestPickConnection(text)
         }
+        return
       }
 
       setBusy(true)
@@ -290,12 +327,18 @@ export function AgentWorkspace(props: Props) {
           confirmWrites,
           preferredSchema: props.preferredSchema || '',
         } as any)
+        const steps = sanitizeStepsForStorage(res.steps)
         props.onAppendMessages(
           taskId,
-          [{ role: 'assistant', content: res.final || '', createdAt: Date.now() }],
+          [{
+            role: 'assistant',
+            content: res.final || '',
+            createdAt: Date.now(),
+            ...(steps ? { steps } : {}),
+            ...(modelLabel && modelLabel !== t('chat.noModel') ? { model: modelLabel } : {}),
+          }],
           connId,
         )
-        setSteps((res.steps || []) as StepEvent[])
       } catch (e: any) {
         props.onRemoveUserMessage(taskId, text)
         setError(String(e?.message || e))
@@ -321,7 +364,6 @@ export function AgentWorkspace(props: Props) {
     const taskId = props.taskId
     if (taskId) {
       props.onHistoryChangeFor(taskId, historyBeforeIndex(props.history, index))
-      setSteps([])
       setError('')
     }
     setDraft(m.content)
@@ -335,7 +377,6 @@ export function AgentWorkspace(props: Props) {
     const taskId = props.taskId
     if (!taskId) return
     props.onHistoryChangeFor(taskId, historyBeforeIndex(props.history, index))
-    setSteps([])
     setError('')
     void send(m.content)
   }
@@ -346,40 +387,47 @@ export function AgentWorkspace(props: Props) {
         <div className="log archive">
           <div className="log-col">
             {!hasHistory && !busy && (
-              <div className="agent-intro" role="status">
-                <div className="agent-intro-role">{t('chat.intro.role')}</div>
-                <h3 className="agent-intro-title">{t('chat.intro.title')}</h3>
-                <p className="agent-intro-lead">{t('chat.intro.lead')}</p>
-                <ul className="agent-intro-caps">
-                  <li>{t('chat.intro.cap.query')}</li>
-                  <li>{t('chat.intro.cap.schema')}</li>
-                  <li>{t('chat.intro.cap.sql')}</li>
-                  <li>{t('chat.intro.cap.write')}</li>
-                </ul>
-                {(props.connectionName || props.preferredSchema) && (
-                  <p className="agent-intro-ctx muted">
-                    {props.preferredSchema
-                      ? t('chat.intro.ctx', {
-                          conn: props.connectionName || t('agent.noConnection'),
-                          schema: props.preferredSchema,
-                        })
-                      : t('chat.intro.ctxConn', {
-                          conn: props.connectionName || t('agent.noConnection'),
-                        })}
-                  </p>
-                )}
-                <p className="agent-intro-hint muted">{t('chat.intro.hint')}</p>
-                <div className="agent-intro-chips">
-                  {introChips.map((c) => (
-                    <button
-                      key={c.key}
-                      type="button"
-                      className="chip"
-                      onClick={() => applyChip(c.prompt)}
-                    >
-                      {c.label}
-                    </button>
-                  ))}
+              <div className="msg assistant agent-intro" role="status">
+                <div className="msg-brand">
+                  <img className="msg-brand-logo" src={logoSrc} alt="" />
+                  <div className="msg-brand-text">
+                    <span className="msg-brand-name">{t('chat.title')}</span>
+                  </div>
+                </div>
+                <div className="msg-assistant-body agent-intro-body">
+                  <h3 className="agent-intro-title">{t('chat.intro.title')}</h3>
+                  <p className="agent-intro-lead">{t('chat.intro.lead')}</p>
+                  <ul className="agent-intro-caps">
+                    <li>{t('chat.intro.cap.query')}</li>
+                    <li>{t('chat.intro.cap.schema')}</li>
+                    <li>{t('chat.intro.cap.sql')}</li>
+                    <li>{t('chat.intro.cap.write')}</li>
+                  </ul>
+                  {(props.connectionName || props.preferredSchema) && (
+                    <p className="agent-intro-ctx muted">
+                      {props.preferredSchema
+                        ? t('chat.intro.ctx', {
+                            conn: props.connectionName || t('agent.noConnection'),
+                            schema: props.preferredSchema,
+                          })
+                        : t('chat.intro.ctxConn', {
+                            conn: props.connectionName || t('agent.noConnection'),
+                          })}
+                    </p>
+                  )}
+                  <p className="agent-intro-hint muted">{t('chat.intro.hint')}</p>
+                  <div className="agent-intro-chips">
+                    {introChips.map((c) => (
+                      <button
+                        key={c.key}
+                        type="button"
+                        className="chip agent-intro-chip"
+                        onClick={() => applyChip(c.prompt)}
+                      >
+                        {c.label}
+                      </button>
+                    ))}
+                  </div>
                 </div>
               </div>
             )}
@@ -416,19 +464,79 @@ export function AgentWorkspace(props: Props) {
                 )
               }
               if (m.role !== 'assistant') return null
+              const thought = thinkingFromSteps(m.steps)
+              const tools = toolCallsFromSteps(m.steps)
               const outTokens = estimateTokens(m.content || '')
+              const timeLabel = formatMsgTime(m.createdAt, locale)
+              const metaText = timeLabel
+                ? t('chat.msg.metaLine', { out: outTokens, time: timeLabel })
+                : outTokens > 0
+                  ? t('chat.msg.metaOut', { out: outTokens })
+                  : ''
+              const metaRow = (metaText || m.content) ? (
+                <div className="msg-meta msg-meta-assistant">
+                  {metaText && <span className="msg-time">{metaText}</span>}
+                  <div className="msg-actions">
+                    <button type="button" className="msg-action" title={t('chat.msg.copy')} onClick={() => void copyMessage(m.content)}>
+                      <svg width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                        <rect x="9" y="9" width="11" height="11" rx="2" fill="none" stroke="currentColor" strokeWidth="1.7" />
+                        <path d="M6 15H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v1" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" />
+                      </svg>
+                    </button>
+                  </div>
+                </div>
+              ) : null
               return (
                 <div key={i} className="msg assistant">
                   <div className="msg-brand">
                     <img className="msg-brand-logo" src={logoSrc} alt="" />
-                    <span className="msg-brand-name">{t('chat.title')}</span>
+                    <div className="msg-brand-text">
+                      <span className="msg-brand-name">{t('chat.title')}</span>
+                      {m.model && <span className="msg-brand-model">{m.model}</span>}
+                    </div>
                   </div>
-                  <div className="msg-assistant-body">
-                    <MarkdownBody>{m.content}</MarkdownBody>
-                  </div>
-                  {outTokens > 0 && (
-                    <div className="msg-token-badge">{t('chat.msg.outTokens', { n: outTokens })}</div>
-                  )}
+                  {thought ? (
+                    <details className="msg-thinking" open>
+                      <summary>{t('agent.thoughtProcess')}</summary>
+                      <div className="msg-thinking-body">
+                        <MarkdownBody className="md-body-steps">{thought}</MarkdownBody>
+                      </div>
+                    </details>
+                  ) : null}
+                  {thought ? metaRow : null}
+                  {tools.length > 0 ? (
+                    <details className="msg-tools">
+                      <summary>
+                        <span className="msg-tools-icon" aria-hidden="true">▶</span>
+                        {t('agent.toolCalls', { n: tools.length })}
+                      </summary>
+                      <ul className="msg-tools-list">
+                        {tools.map((tc, ti) => (
+                          <li key={ti} className="msg-tool-item">
+                            <div className="msg-tool-name"><code>{tc.name}</code></div>
+                            {tc.args ? (
+                              <div className="msg-tool-block">
+                                <div className="msg-tool-label">{t('agent.toolArgs')}</div>
+                                <pre>{tc.args}</pre>
+                              </div>
+                            ) : null}
+                            {tc.result ? (
+                              <div className="msg-tool-block">
+                                <div className="msg-tool-label">{t('agent.toolResult')}</div>
+                                <pre>{tc.result}</pre>
+                              </div>
+                            ) : null}
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
+                  {m.content ? (
+                    <div className="msg-assistant-body">
+                      <MarkdownBody>{m.content}</MarkdownBody>
+                    </div>
+                  ) : null}
+                  {!thought ? metaRow : null}
                 </div>
               )
             })}
@@ -436,23 +544,18 @@ export function AgentWorkspace(props: Props) {
               <div className="msg assistant">
                 <div className="msg-brand">
                   <img className="msg-brand-logo" src={logoSrc} alt="" />
-                  <span className="msg-brand-name">{t('chat.title')}</span>
+                  <div className="msg-brand-text">
+                    <span className="msg-brand-name">{t('chat.title')}</span>
+                    {modelLabel && modelLabel !== t('chat.noModel') && (
+                      <span className="msg-brand-model">{modelLabel}</span>
+                    )}
+                  </div>
                 </div>
-                <div className="msg-assistant-body muted"><em>{t('agent.thinking')}</em></div>
+                <details className="msg-thinking" open>
+                  <summary>{t('agent.thoughtProcess')}</summary>
+                  <div className="msg-thinking-body muted">{t('agent.thinkingBusy')}</div>
+                </details>
               </div>
-            )}
-            {steps.length > 0 && (
-              <details className="steps" open={!busy}>
-                <summary>{t('agent.steps', { n: steps.length })}</summary>
-                <ul>
-                  {steps.map((s, i) => (
-                    <li key={i}>
-                      <code>{s.kind}{s.name ? `:${s.name}` : ''}</code>
-                      <MarkdownBody className="md-body-steps">{s.content}</MarkdownBody>
-                    </li>
-                  ))}
-                </ul>
-              </details>
             )}
           </div>
         </div>
@@ -512,52 +615,21 @@ export function AgentWorkspace(props: Props) {
             />
             <div className="composer-toolbar">
               <div className="composer-left">
-                <div className="host-menu-wrap" ref={hostMenuRoot}>
-                  <button
-                    type="button"
-                    className={`tool-pill meta-btn${showConnPicker ? ' open' : ''}${inSession || hasHistory ? ' host-bound' : ''}`}
-                    title={props.connectionName || t('chat.workspace')}
-                    onClick={() => {
-                      // 任务已绑定或已有对话：换库走顶栏下拉，底栏只读展示。
-                      if (inSession || hasHistory) return
-                      if (props.connections.length === 0) {
-                        props.onGotoConnections()
-                        return
-                      }
-                      setShowConnPicker((v) => !v)
-                    }}
-                  >
-                    <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                      <path d="M4 4h16v6H4z M4 14h16v6H4z M7 7h.01 M7 17h.01" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                    <span className={`conn-dot${props.connected ? ' on' : ''}`} title={props.connected ? t('app.live') : t('app.offline')} />
-                    <span className="meta-label">{props.connectionName || t('chat.workspace')}</span>
-                    {!inSession && !hasHistory && <span className="caret-down">{showConnPicker ? '▴' : '▾'}</span>}
-                  </button>
-                  {showConnPicker && !inSession && !hasHistory && (
-                    <div className="host-menu" role="listbox">
-                      {props.connections.length === 0 ? (
-                        <button type="button" className="model-menu-item" onClick={props.onGotoConnections}>
-                          {t('chat.pickConn.add')}
-                        </button>
-                      ) : (
-                        props.connections.map((c) => (
-                          <button
-                            key={c.id}
-                            type="button"
-                            className={`model-menu-item${c.id === props.connectionId ? ' on' : ''}`}
-                            onClick={() => {
-                              props.onSelectConnection(c.id)
-                              setShowConnPicker(false)
-                            }}
-                          >
-                            {c.name} · {c.type}
-                          </button>
-                        ))
-                      )}
-                    </div>
-                  )}
-                </div>
+                {/* 首页不展示选连接：未选库发送走 App 弹窗；会话内只读展示已绑连接。 */}
+                {!showHomeHero && (
+                  <div className="host-menu-wrap">
+                    <span
+                      className="tool-pill meta-btn host-bound"
+                      title={props.connectionName || t('chat.workspace')}
+                    >
+                      <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                        <path d="M4 4h16v6H4z M4 14h16v6H4z M7 7h.01 M7 17h.01" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                      </svg>
+                      <span className={`conn-dot${props.connected ? ' on' : ''}`} title={props.connected ? t('app.live') : t('app.offline')} />
+                      <span className="meta-label">{props.connectionName || t('chat.workspace')}</span>
+                    </span>
+                  </div>
+                )}
               </div>
               <div className="composer-right">
                 <span

@@ -28,7 +28,28 @@ function folderLabel(t: (k: string, vars?: Record<string, string | number>) => s
 function canExpand(node: ObjectNode) {
   if (node.lazy) return true
   if (node.children && node.children.length > 0) return true
-  return node.kind === 'schema' || node.kind === 'database' || node.kind === 'folder' || node.kind === 'table' || node.kind === 'view'
+  return (
+    node.kind === 'schema' ||
+    node.kind === 'database' ||
+    node.kind === 'folder' ||
+    node.kind === 'table' ||
+    node.kind === 'view' ||
+    node.kind === 'collection'
+  )
+}
+
+/** Folder name → TablePlus-style typed group chip (not a yellow folder). */
+const FOLDER_ICO: Record<string, string> = {
+  tables: 'group-table',
+  views: 'group-view',
+  procedures: 'group-proc',
+  functions: 'group-fn',
+  triggers: 'group-trigger',
+  events: 'group-event',
+  sequences: 'group-seq',
+  columns: 'group-col',
+  indexes: 'group-idx',
+  keys: 'group-key',
 }
 
 /** Fixed icon slot class — every row gets one so the glyph column stays aligned. */
@@ -38,7 +59,7 @@ function icoClass(node: ObjectNode): string {
     case 'database':
       return 'db'
     case 'folder':
-      return 'folder'
+      return FOLDER_ICO[node.name] || 'group'
     case 'table':
       return 'table'
     case 'view':
@@ -59,8 +80,10 @@ function icoClass(node: ObjectNode): string {
       return 'idx'
     case 'key':
       return 'key'
+    case 'collection':
+      return 'table'
     default:
-      return 'folder'
+      return 'group'
   }
 }
 

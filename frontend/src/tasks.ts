@@ -1,4 +1,4 @@
-import { ChatMessage } from './types'
+import { ChatMessage, StepEvent } from './types'
 
 const TASKS_KEY = 'aidb.tasks'
 const ACTIVE_KEY = 'aidb.activeTaskId'
@@ -6,6 +6,32 @@ const ACTIVE_KEY = 'aidb.activeTaskId'
 /** Cap localStorage growth from long-lived chat history. */
 export const MAX_TASKS = 50
 export const MAX_MESSAGES_PER_TASK = 200
+/** Per-step content cap when persisting (tool_result can be 12KB from the agent). */
+export const MAX_STEP_CONTENT_CHARS = 2000
+
+const PERSIST_STEP_KINDS = new Set(['thinking', 'tool', 'tool_result', 'error'])
+
+/** Keep UI-relevant steps only; drop duplicate `message` bodies; truncate large payloads. */
+export function sanitizeStepsForStorage(steps: unknown): StepEvent[] | undefined {
+  if (!Array.isArray(steps)) return undefined
+  const out: StepEvent[] = []
+  for (const raw of steps) {
+    if (!raw || typeof raw !== 'object') continue
+    const s = raw as Record<string, unknown>
+    const kind = typeof s.kind === 'string' ? s.kind : ''
+    if (!PERSIST_STEP_KINDS.has(kind) || typeof s.content !== 'string') continue
+    let content = s.content
+    if (content.length > MAX_STEP_CONTENT_CHARS) {
+      content = `${content.slice(0, MAX_STEP_CONTENT_CHARS)}…(truncated)`
+    }
+    out.push({
+      kind,
+      content,
+      ...(typeof s.name === 'string' && s.name ? { name: s.name } : {}),
+    })
+  }
+  return out.length ? out : undefined
+}
 
 export type Task = {
   id: string
@@ -37,11 +63,16 @@ export function normalizeTasks(list: unknown): Task[] {
       .filter((m): m is ChatMessage => !!m && typeof m === 'object'
         && (m.role === 'user' || m.role === 'assistant')
         && typeof m.content === 'string')
-      .map((m) => ({
-        role: m.role,
-        content: m.content,
-        ...(typeof m.createdAt === 'number' ? { createdAt: m.createdAt } : {}),
-      }))
+      .map((m) => {
+        const steps = sanitizeStepsForStorage(m.steps)
+        return {
+          role: m.role,
+          content: m.content,
+          ...(typeof m.createdAt === 'number' ? { createdAt: m.createdAt } : {}),
+          ...(steps ? { steps } : {}),
+          ...(typeof m.model === 'string' && m.model.trim() ? { model: m.model.trim() } : {}),
+        }
+      })
       .slice(-MAX_MESSAGES_PER_TASK)
     cleaned.push({
       id: item.id,
@@ -66,9 +97,35 @@ export function loadTasks(): Task[] {
 }
 
 export function saveTasks(tasks: Task[]) {
+  const normalized = normalizeTasks(tasks)
   try {
-    localStorage.setItem(TASKS_KEY, JSON.stringify(normalizeTasks(tasks)))
-  } catch { /* ignore quota / private mode */ }
+    localStorage.setItem(TASKS_KEY, JSON.stringify(normalized))
+    return
+  } catch {
+    /* quota / private mode — retry without bulky tool payloads */
+  }
+  try {
+    const slim = normalized.map((task) => ({
+      ...task,
+      messages: task.messages.map((m) => {
+        const base: ChatMessage = {
+          role: m.role,
+          content: m.content,
+          ...(m.createdAt != null ? { createdAt: m.createdAt } : {}),
+          ...(m.model ? { model: m.model } : {}),
+        }
+        if (!m.steps?.length) return base
+        const steps = m.steps
+          .filter((s) => s.kind === 'thinking' || s.kind === 'tool' || s.kind === 'error')
+          .map((s) => ({
+            ...s,
+            content: s.content.length > 400 ? `${s.content.slice(0, 400)}…(truncated)` : s.content,
+          }))
+        return steps.length ? { ...base, steps } : base
+      }),
+    }))
+    localStorage.setItem(TASKS_KEY, JSON.stringify(slim))
+  } catch { /* give up */ }
 }
 
 export function loadActiveTaskId(): string {

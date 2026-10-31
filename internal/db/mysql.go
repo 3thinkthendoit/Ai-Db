@@ -59,10 +59,11 @@ func (d *mysqlDriver) Ping(ctx context.Context) error { return pingSQL(ctx, d.db
 
 func (d *mysqlDriver) Close() error { return d.db.Close() }
 
-func (d *mysqlDriver) SetActiveSchema(schema string) {
+func (d *mysqlDriver) SetActiveSchema(schema string) error {
 	d.mu.Lock()
 	d.activeSchema = strings.TrimSpace(schema)
 	d.mu.Unlock()
+	return nil
 }
 
 func (d *mysqlDriver) sessionSQL() string {

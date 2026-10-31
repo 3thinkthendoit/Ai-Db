@@ -1,5 +1,15 @@
 import { useEffect, useState } from 'react'
 import { useTipToast } from '../components/TipToast'
+import {
+  FONT_FAMILY_IDS,
+  FONT_SIZE_IDS,
+  getFontFamily,
+  getFontSize,
+  setFontFamily,
+  setFontSize,
+  type FontFamilyId,
+  type FontSizeId,
+} from '../fontPrefs'
 import { useI18n } from '../i18n'
 import { getTheme, setTheme, type Theme } from '../theme'
 import { LLMConfig } from '../types'
@@ -17,6 +27,8 @@ export function PrefsView() {
   const { t, locale, setLocale } = useI18n()
   const { showTip, tipNode } = useTipToast()
   const [theme, setThemeState] = useState<Theme>(() => getTheme())
+  const [fontFamily, setFontFamilyState] = useState<FontFamilyId>(() => getFontFamily())
+  const [fontSize, setFontSizeState] = useState<FontSizeId>(() => getFontSize())
   const [safety, setSafety] = useState({
     allowWrites: false,
     maxRows: DEFAULT_MAX_ROWS,
@@ -45,6 +57,16 @@ export function PrefsView() {
   function pickTheme(v: Theme) {
     setTheme(v)
     setThemeState(v)
+  }
+
+  function pickFontFamily(v: FontFamilyId) {
+    setFontFamily(v)
+    setFontFamilyState(v)
+  }
+
+  function pickFontSize(v: FontSizeId) {
+    setFontSize(v)
+    setFontSizeState(v)
   }
 
   async function saveSafety() {
@@ -111,6 +133,42 @@ export function PrefsView() {
             <div className="pill-seg" role="group" aria-label={t('prefs.language')}>
               <button type="button" className={locale === 'zh' ? 'on' : ''} onClick={() => setLocale('zh')}>中文</button>
               <button type="button" className={locale === 'en' ? 'on' : ''} onClick={() => setLocale('en')}>English</button>
+            </div>
+          </div>
+
+          <div className="field">
+            <div className="field-meta">
+              <div className="field-title">{t('prefs.font')}</div>
+              <div className="field-desc">{t('prefs.font.hint')}</div>
+            </div>
+            <select
+              className="prefs-select"
+              aria-label={t('prefs.font')}
+              value={fontFamily}
+              onChange={(e) => pickFontFamily(e.target.value as FontFamilyId)}
+            >
+              {FONT_FAMILY_IDS.map((id) => (
+                <option key={id} value={id}>{t(`prefs.font.${id}`)}</option>
+              ))}
+            </select>
+          </div>
+
+          <div className="field">
+            <div className="field-meta">
+              <div className="field-title">{t('prefs.fontSize')}</div>
+              <div className="field-desc">{t('prefs.fontSize.hint')}</div>
+            </div>
+            <div className="pill-seg" role="group" aria-label={t('prefs.fontSize')}>
+              {FONT_SIZE_IDS.map((id) => (
+                <button
+                  key={id}
+                  type="button"
+                  className={fontSize === id ? 'on' : ''}
+                  onClick={() => pickFontSize(id)}
+                >
+                  {t(`prefs.fontSize.${id}`)}
+                </button>
+              ))}
             </div>
           </div>
         </div>

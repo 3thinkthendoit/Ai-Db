@@ -29,9 +29,21 @@ export function ConnectionForm({ initial, onSave, onTest, onClose }: Props) {
       const next = { ...f, [key]: value }
       if (key === 'type') {
         const typ = value as ConnType
-        const ports: Record<ConnType, number> = { mysql: 3306, postgres: 5432, redis: 6379 }
+        const ports: Record<ConnType, number> = { mysql: 3306, postgres: 5432, redis: 6379, mongo: 27017 }
         next.port = ports[typ]
-        if (typ === 'redis') next.user = ''
+        if (typ === 'redis' || typ === 'mongo') next.user = ''
+        if (typ === 'mongo') {
+          next.database = next.database || 'test'
+          next.authSource = next.authSource || 'admin'
+        } else {
+          next.authSource = ''
+        }
+        if (typ === 'postgres') {
+          next.sslMode = next.sslMode || 'prefer'
+        } else {
+          next.sslMode = ''
+        }
+        if (typ === 'redis') next.database = ''
       }
       return next
     })
@@ -85,6 +97,7 @@ export function ConnectionForm({ initial, onSave, onTest, onClose }: Props) {
             <option value="mysql">MySQL</option>
             <option value="postgres">PostgreSQL</option>
             <option value="redis">Redis</option>
+            <option value="mongo">MongoDB</option>
           </select>
         </label>
         <div className="row2">
@@ -106,8 +119,33 @@ export function ConnectionForm({ initial, onSave, onTest, onClose }: Props) {
           </label>
         </div>
         <label>{form.type === 'redis' ? t('conn.form.dbIndex') : t('conn.form.database')}
-          <input value={form.database} onChange={(e) => set('database', e.target.value)} />
+          <input
+            value={form.database}
+            placeholder={form.type === 'redis' ? t('conn.form.dbIndexHint') : undefined}
+            onChange={(e) => set('database', e.target.value)}
+          />
         </label>
+        {form.type === 'mongo' && (
+          <label>{t('conn.form.authSource')}
+            <input
+              value={form.authSource || ''}
+              placeholder="admin"
+              onChange={(e) => set('authSource', e.target.value)}
+            />
+          </label>
+        )}
+        {form.type === 'postgres' && (
+          <label>{t('conn.form.sslMode')}
+            <select value={form.sslMode || 'prefer'} onChange={(e) => set('sslMode', e.target.value)}>
+              <option value="disable">disable</option>
+              <option value="allow">allow</option>
+              <option value="prefer">prefer</option>
+              <option value="require">require</option>
+              <option value="verify-ca">verify-ca</option>
+              <option value="verify-full">verify-full</option>
+            </select>
+          </label>
+        )}
         {msg && <p className="form-msg">{msg}</p>}
         <div className="modal-actions">
           <button type="button" disabled={busy} onClick={onClose}>{t('conn.form.cancel')}</button>

@@ -51,7 +51,9 @@ func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.
 	}
 	allowWrite := llmCfg.AllowWrites && confirmWrites
 	if preferredSchema = strings.TrimSpace(preferredSchema); preferredSchema != "" {
-		_ = s.mgr.SetActiveSchema(conn.ID, preferredSchema)
+		if err := s.mgr.SetActiveSchema(conn.ID, preferredSchema); err != nil {
+			return nil, fmt.Errorf("switch database/schema %q: %w", preferredSchema, err)
+		}
 	}
 	runner := NewToolRunner(s.mgr, conn.ID, conn.Type, allowWrite, llmCfg.MaxRows)
 	client := NewClient(llmCfg)
@@ -80,6 +82,15 @@ func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.
 		}
 		messages = append(messages, msg)
 
+		if think := strings.TrimSpace(msg.ReasoningContent); think != "" {
+			out.Steps = append(out.Steps, StepEvent{Kind: "thinking", Content: think})
+		} else if len(msg.ToolCalls) > 0 {
+			// Some models put interim thoughts in content alongside tool_calls.
+			if think := strings.TrimSpace(msg.Content); think != "" {
+				out.Steps = append(out.Steps, StepEvent{Kind: "thinking", Content: think})
+			}
+		}
+
 		if len(msg.ToolCalls) == 0 {
 			out.Final = msg.Content
 			out.Messages = append(out.Messages, Message{Role: "assistant", Content: msg.Content})
@@ -87,7 +98,6 @@ func (s *Service) Run(ctx context.Context, llmCfg config.LLMConfig, conn config.
 			return out, nil
 		}
 
-		out.Steps = append(out.Steps, StepEvent{Kind: "thinking", Content: fmt.Sprintf("tool calls: %d", len(msg.ToolCalls))})
 		for _, tc := range msg.ToolCalls {
 			out.Steps = append(out.Steps, StepEvent{Kind: "tool", Name: tc.Function.Name, Content: tc.Function.Arguments})
 			result, err := runner.Run(ctx, tc.Function.Name, tc.Function.Arguments)
@@ -126,8 +136,17 @@ func buildSystemPrompt(conn config.Connection, llm config.LLMConfig, preferredSc
 	b.WriteString(fmt.Sprintf("Engine: %s\n", conn.Type))
 	b.WriteString(fmt.Sprintf("Host: %s  Database/DB index: %s\n", conn.Host, conn.Database))
 	if s := strings.TrimSpace(preferredSchema); s != "" {
-		b.WriteString(fmt.Sprintf("User-selected database/schema: %s\n", s))
-		b.WriteString("Prefer this schema for list_tables/describe and qualify SQL accordingly (MySQL: USE when helpful).\n")
+		switch conn.Type {
+		case config.ConnPostgres:
+			b.WriteString(fmt.Sprintf("User-selected PostgreSQL database (catalog): %s\n", s))
+			b.WriteString("list_schemas returns databases. list_tables/describe_table use schema= as a namespace (default public). Pass database= to inspect another catalog temporarily (does not change the workbench database). Qualify SQL as schema.table against the selected catalog.\n")
+		case config.ConnRedis:
+			b.WriteString(fmt.Sprintf("User-selected Redis logical DB index: %s\n", s))
+			b.WriteString("Keys/commands run against this logical DB. Do not assume DB 0 unless the user selected it.\n")
+		default:
+			b.WriteString(fmt.Sprintf("User-selected database/schema: %s\n", s))
+			b.WriteString("Prefer this schema for list_tables/describe and qualify SQL accordingly (MySQL: USE when helpful).\n")
+		}
 	}
 	b.WriteString(fmt.Sprintf("Safety mode: %s\n", mode))
 	b.WriteString(fmt.Sprintf("Result row limit: %d\n", llm.MaxRows))
