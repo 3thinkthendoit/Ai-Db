@@ -11,3 +11,6 @@ frontend/node_modules
 
 # Server runtime data dir (master.key, session.secret) — never commit secrets.
 data/
+
+# Ad-hoc scratch/diff dumps from debugging — never commit.
+tmp_*.txt
