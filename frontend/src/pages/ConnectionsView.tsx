@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { Connection } from '../types'
 import { useI18n } from '../i18n'
-import { TestConnection } from '../../wailsjs/go/main/App'
+import { TestConnection } from '../lib/api'
 
 interface Props {
   connections: Connection[]

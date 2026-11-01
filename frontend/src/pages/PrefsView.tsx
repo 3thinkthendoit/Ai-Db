@@ -13,7 +13,7 @@ import {
 import { useI18n } from '../i18n'
 import { getTheme, setTheme, type Theme } from '../theme'
 import { LLMConfig } from '../types'
-import { GetLLMConfig, SaveLLMSafety } from '../../wailsjs/go/main/App'
+import { GetLLMConfig, SaveLLMSafety } from '../lib/api'
 
 const DEFAULT_MAX_ROWS = 500
 const DEFAULT_MAX_STEPS = 12

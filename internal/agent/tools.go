@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"strings"
+	"time"
 
 	"AI-DB/internal/config"
 	"AI-DB/internal/db"
@@ -17,6 +18,8 @@ type ToolRunner struct {
 	connType   config.ConnType
 	allowWrite bool
 	maxRows    int
+	// queryTimeout bounds a single tool operation; 0 = unbounded (desktop).
+	queryTimeout time.Duration
 }
 
 // NewToolRunner creates a tool runner bound to a connection.
@@ -185,6 +188,13 @@ func (t *ToolRunner) Run(ctx context.Context, name, argsJSON string) (string, er
 		return "", err
 	}
 	defer release()
+
+	// Bound each tool operation so a runaway agent query cannot hang the turn.
+	if t.queryTimeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, t.queryTimeout)
+		defer cancel()
+	}
 
 	switch name {
 	case "execute_query":

@@ -32,7 +32,7 @@ import {
   TestConnection,
   UpsertConnection,
   WritesAllowed,
-} from '../wailsjs/go/main/App'
+} from './lib/api'
 import { WindowSetTitle } from '../wailsjs/runtime/runtime'
 
 const NEW_TASK_ICON =
@@ -47,7 +47,7 @@ function redisSchemaLabel(raw: string | undefined | null): string {
   return s
 }
 
-function preferSchemaForConn(conn: Connection | undefined, schemaOptions: string[]): string {
+function preferSchemaForConn(conn: Connection | null | undefined, schemaOptions: string[]): string {
   if (!conn) return schemaOptions[0] || ''
   if (conn.type === 'redis') {
     const prefer = redisSchemaLabel(conn.database)

@@ -8,3 +8,6 @@ frontend/node_modules
 *.log
 .env
 .env.*
+
+# Server runtime data dir (master.key, session.secret) — never commit secrets.
+data/

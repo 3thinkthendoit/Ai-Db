@@ -1,5 +1,5 @@
 import type { SQLNamespace } from '@codemirror/lang-sql'
-import { ExpandObject } from '../../wailsjs/go/main/App'
+import { ExpandObject } from './api'
 import type { ObjectNode } from '../types'
 
 /** Cap metadata fan-out — only the focused schema, limited tables with columns. */

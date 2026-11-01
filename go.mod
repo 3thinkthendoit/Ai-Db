@@ -10,6 +10,7 @@ require (
 	github.com/redis/go-redis/v9 v9.23.0
 	github.com/wailsapp/wails/v2 v2.16.0
 	go.mongodb.org/mongo-driver/v2 v2.9.2
+	golang.org/x/crypto v0.58.0
 )
 
 require (
@@ -48,7 +49,6 @@ require (
 	github.com/youmark/pkcs8 v0.0.0-20240726163527-a2c0da244d78 // indirect
 	github.com/yuin/gopher-lua v1.1.1 // indirect
 	go.uber.org/atomic v1.12.0 // indirect
-	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/net v0.60.0 // indirect
 	golang.org/x/sync v0.24.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

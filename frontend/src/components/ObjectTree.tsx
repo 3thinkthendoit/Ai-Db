@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { ObjectNode } from '../types'
-import { ExpandObject } from '../../wailsjs/go/main/App'
+import { ExpandObject } from '../lib/api'
 import { useI18n } from '../i18n'
 
 interface Props {

@@ -9,7 +9,7 @@ import {
   ListLLMProfiles,
   SaveLLMProfile,
   TestLLMProfile,
-} from '../../wailsjs/go/main/App'
+} from '../lib/api'
 
 type FormState = {
   id: string

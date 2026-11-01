@@ -5,10 +5,10 @@ import { historyBeforeIndex, isRetryableUserTurn } from '../lib/chatHistory'
 import { ChatMessage, Connection, LLMProfileView, StepEvent } from '../types'
 import {
   ActivateLLMProfile,
-  AgentChat,
+  AgentChatStream,
   ListLLMProfiles,
   WritesAllowed,
-} from '../../wailsjs/go/main/App'
+} from '../lib/api'
 import { useI18n } from '../i18n'
 import type { Locale } from '../locales'
 import { sanitizeStepsForStorage } from '../tasks'
@@ -132,6 +132,9 @@ export function AgentWorkspace(props: Props) {
   const [draft, setDraft] = useState('')
   const [activeTab, setActiveTab] = useState<string>('query')
   const [busy, setBusy] = useState(false)
+  // Live agent steps streamed during the in-flight turn (web SSE). Empty on
+  // desktop, where steps only replay after the one-shot response returns.
+  const [liveSteps, setLiveSteps] = useState<StepEvent[]>([])
   const [error, setError] = useState('')
   const [modelLabel, setModelLabel] = useState('')
   const [profiles, setProfiles] = useState<LLMProfileView[]>([])
@@ -289,6 +292,7 @@ export function AgentWorkspace(props: Props) {
       }
 
       setBusy(true)
+      setLiveSteps([])
 
       const alreadyLive = props.connected && connId === props.connectionId
       if (!alreadyLive) {
@@ -320,13 +324,16 @@ export function AgentWorkspace(props: Props) {
       props.onAppendMessages(taskId, [{ role: 'user', content: text, createdAt: now }], connId)
       setDraft('')
       try {
-        const res = await AgentChat({
-          connectionId: connId,
-          history: priorHistory.map((m) => ({ role: m.role, content: m.content })),
-          message: text,
-          confirmWrites,
-          preferredSchema: props.preferredSchema || '',
-        } as any)
+        const res = await AgentChatStream(
+          {
+            connectionId: connId,
+            history: priorHistory.map((m) => ({ role: m.role, content: m.content })),
+            message: text,
+            confirmWrites,
+            preferredSchema: props.preferredSchema || '',
+          } as any,
+          (step) => setLiveSteps((prev) => [...prev, step as StepEvent]),
+        )
         const steps = sanitizeStepsForStorage(res.steps)
         props.onAppendMessages(
           taskId,
@@ -553,7 +560,16 @@ export function AgentWorkspace(props: Props) {
                 </div>
                 <details className="msg-thinking" open>
                   <summary>{t('agent.thoughtProcess')}</summary>
-                  <div className="msg-thinking-body muted">{t('agent.thinkingBusy')}</div>
+                  {liveSteps.length > 0 ? (
+                    <div className="msg-thinking-body">
+                      <MarkdownBody className="md-body-steps">{thinkingFromSteps(liveSteps)}</MarkdownBody>
+                      {toolCallsFromSteps(liveSteps).length > 0 && (
+                        <div className="muted">{t('agent.toolCalls', { n: toolCallsFromSteps(liveSteps).length })}</div>
+                      )}
+                    </div>
+                  ) : (
+                    <div className="msg-thinking-body muted">{t('agent.thinkingBusy')}</div>
+                  )}
                 </details>
               </div>
             )}

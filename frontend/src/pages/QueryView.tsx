@@ -4,7 +4,7 @@ import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
 import { ObjectNode, QueryResult } from '../types'
-import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../../wailsjs/go/main/App'
+import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../lib/api'
 import { useI18n } from '../i18n'
 import { BodyPortal } from '../lib/portal'
 import {
