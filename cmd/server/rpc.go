@@ -402,4 +402,75 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 		}
 		return res, nil
 	})
+
+	// —— mutation gate / DBA review (server-only behaviour; desktop has no store) ——
+	s.route(mux, "ListMutations", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		status := ""
+		if len(args) > 0 {
+			status, _ = argString(args, 0)
+		}
+		limit := 100
+		if len(args) > 1 {
+			if n, err := argJSON[int](args, 1); err == nil {
+				limit = n
+			}
+		}
+		out, err := s.svc.ListMutations(ctx, p, status, limit)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return []app.MutationView{}, nil
+		}
+		return out, nil
+	})
+	s.route(mux, "ListQueryAudit", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		limit := 100
+		if len(args) > 0 {
+			if n, err := argJSON[int](args, 0); err == nil {
+				limit = n
+			}
+		}
+		out, err := s.svc.ListQueryAudit(ctx, p, limit)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return []app.QueryAuditView{}, nil
+		}
+		return out, nil
+	})
+	s.route(mux, "ApproveMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return s.svc.ApproveMutation(ctx, p, id, note)
+	})
+	s.route(mux, "RejectMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return nil, s.svc.RejectMutation(ctx, p, id, note)
+	})
+	s.route(mux, "RollbackMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return s.svc.RollbackMutation(ctx, p, id, note)
+	})
 }

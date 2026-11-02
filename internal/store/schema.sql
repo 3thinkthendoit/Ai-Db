@@ -72,3 +72,49 @@ CREATE TABLE IF NOT EXISTS user_settings (
   PRIMARY KEY (owner_id),
   CONSTRAINT fk_settings_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Durable query audit (server mutation gate). sql_text stores the original statement.
+CREATE TABLE IF NOT EXISTS query_audit (
+  id              VARCHAR(36)  NOT NULL,
+  ts              DATETIME(3)  NOT NULL,
+  actor_id        VARCHAR(36)  NOT NULL DEFAULT '',
+  actor_name      VARCHAR(64)  NOT NULL DEFAULT '',
+  actor_role      VARCHAR(16)  NOT NULL DEFAULT '',
+  connection_id   VARCHAR(36)  NOT NULL DEFAULT '',
+  sql_text        MEDIUMTEXT   NOT NULL,
+  mutating        TINYINT(1)   NOT NULL DEFAULT 0,
+  outcome         VARCHAR(32)  NOT NULL DEFAULT '',
+  detail          VARCHAR(512) NOT NULL DEFAULT '',
+  duration_ms     BIGINT       NOT NULL DEFAULT 0,
+  mutation_id     VARCHAR(36)  NOT NULL DEFAULT '',
+  PRIMARY KEY (id),
+  KEY idx_qa_ts (ts),
+  KEY idx_qa_actor (actor_id, ts),
+  KEY idx_qa_conn (connection_id, ts)
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Pending / executed / rolled-back mutating statements (DBA approval + rollback).
+CREATE TABLE IF NOT EXISTS mutation_requests (
+  id              VARCHAR(36)  NOT NULL,
+  created_at      DATETIME(3)  NOT NULL,
+  updated_at      DATETIME(3)  NOT NULL,
+  owner_id        VARCHAR(36)  NOT NULL,
+  owner_name      VARCHAR(64)  NOT NULL DEFAULT '',
+  connection_id   VARCHAR(36)  NOT NULL,
+  conn_type       VARCHAR(16)  NOT NULL DEFAULT '',
+  active_schema   VARCHAR(128) NOT NULL DEFAULT '',
+  sql_text        MEDIUMTEXT   NOT NULL,
+  stmt_class      VARCHAR(16)  NOT NULL DEFAULT '',
+  status          VARCHAR(16)  NOT NULL DEFAULT 'pending',
+  rollbackable    TINYINT(1)   NOT NULL DEFAULT 0,
+  before_image    LONGTEXT     NULL,
+  reviewer_id     VARCHAR(36)  NOT NULL DEFAULT '',
+  reviewer_name   VARCHAR(64)  NOT NULL DEFAULT '',
+  review_note     VARCHAR(512) NOT NULL DEFAULT '',
+  executed_at     DATETIME(3)  NULL,
+  rolled_back_at  DATETIME(3)  NULL,
+  PRIMARY KEY (id),
+  KEY idx_mr_status (status, created_at),
+  KEY idx_mr_owner (owner_id, created_at),
+  CONSTRAINT fk_mr_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

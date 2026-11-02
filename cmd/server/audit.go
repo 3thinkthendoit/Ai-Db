@@ -112,6 +112,11 @@ var auditedRPCMethods = map[string]bool{
 	"AgentChat":          true,
 	"TestConnection":     true,
 	"TestLLMProfile":     true,
+	"ExecuteQuery":       true,
+	"CreateDatabase":     true,
+	"ApproveMutation":    true,
+	"RejectMutation":     true,
+	"RollbackMutation":   true,
 }
 
 // rpc records an authenticated service call. detail is already-sanitised text

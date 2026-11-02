@@ -80,6 +80,20 @@ func (d *mysqlDriver) Execute(ctx context.Context, query string, maxRows int, al
 	return execSQLWithSession(ctx, d.db, d.sessionSQL(), query, maxRows, allowWrites)
 }
 
+// ExecuteDMLSnapshot runs rollbackable DML with a before-image (MySQL).
+func (d *mysqlDriver) ExecuteDMLSnapshot(ctx context.Context, query string) (*QueryResult, *RowSnapshot, error) {
+	return ExecuteDMLWithSnapshot(ctx, d.db, d.sessionSQL(), query, "mysql")
+}
+
+// ExecuteRollbackSnapshot applies compensating SQL from a snapshot (MySQL).
+func (d *mysqlDriver) ExecuteRollbackSnapshot(ctx context.Context, snap *RowSnapshot) (*QueryResult, error) {
+	stmts, err := BuildRollbackSQL(snap)
+	if err != nil {
+		return nil, err
+	}
+	return ExecuteRollbackSQL(ctx, d.db, d.sessionSQL(), stmts)
+}
+
 func (d *mysqlDriver) ListSchemas(ctx context.Context) ([]string, error) {
 	res, err := execSQL(ctx, d.db, "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY SCHEMA_NAME", 1000, false)
 	if err != nil {

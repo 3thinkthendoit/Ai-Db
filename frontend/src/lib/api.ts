@@ -109,6 +109,61 @@ export const SaveLLMConfig = (arg1: config.LLMConfig): Promise<void> => invoke('
 // agent
 export const AgentChat = (arg1: main.AgentChatRequest): Promise<agent.ChatResponse> => invoke('AgentChat', arg1)
 
+// —— Server-only mutation gate / DBA review (HTTP; not in Wails bindings) ——
+
+export interface MutationView {
+  id: string
+  createdAt: string
+  updatedAt: string
+  ownerId: string
+  ownerName: string
+  connectionId: string
+  connType: string
+  sqlText: string
+  stmtClass: string
+  status: string
+  rollbackable: boolean
+  reviewerName: string
+  reviewNote: string
+  executedAt?: string
+  rolledBackAt?: string
+}
+
+export interface QueryAuditView {
+  id: string
+  ts: string
+  actorName: string
+  actorRole: string
+  connectionId: string
+  sqlText: string
+  mutating: boolean
+  outcome: string
+  detail: string
+  durationMs: number
+  mutationId: string
+}
+
+export const ListMutations = (status = '', limit = 100): Promise<MutationView[]> => {
+  if (isDesktop()) return Promise.resolve([])
+  return call('ListMutations', status, limit)
+}
+export const ListQueryAudit = (limit = 100): Promise<QueryAuditView[]> => {
+  if (isDesktop()) return Promise.resolve([])
+  return call('ListQueryAudit', limit)
+}
+export const ApproveMutation = (id: string, note = ''): Promise<db.QueryResult> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('ApproveMutation', id, note)
+}
+export const RejectMutation = (id: string, note = ''): Promise<void> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('RejectMutation', id, note)
+}
+export const RollbackMutation = (id: string, note = ''): Promise<db.QueryResult> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('RollbackMutation', id, note)
+}
+
 /**
  * Streaming agent chat. On the web it POSTs /api/AgentChatStream and consumes the
  * Server-Sent-Events frames live, invoking onStep for each step (thinking / tool /

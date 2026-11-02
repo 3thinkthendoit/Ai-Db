@@ -52,6 +52,32 @@ const FOLDER_ICO: Record<string, string> = {
   keys: 'group-key',
 }
 
+function DbGlyph() {
+  return (
+    <svg className="tree-ico-db-svg" viewBox="0 0 16 16" aria-hidden>
+      <ellipse cx="8" cy="3.25" rx="5.1" ry="1.85" fill="none" stroke="currentColor" strokeWidth="1.35" />
+      <path
+        d="M2.9 3.25v3.35c0 1.02 2.28 1.85 5.1 1.85s5.1-.83 5.1-1.85V3.25"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M2.9 6.6v3.35c0 1.02 2.28 1.85 5.1 1.85s5.1-.83 5.1-1.85V6.6"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+      />
+      <path
+        d="M2.9 9.95v2.55c0 1.02 2.28 1.85 5.1 1.85s5.1-.83 5.1-1.85v-2.55"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.35"
+      />
+    </svg>
+  )
+}
+
 /** Fixed icon slot class — every row gets one so the glyph column stays aligned. */
 function icoClass(node: ObjectNode): string {
   switch (node.kind) {
@@ -99,6 +125,7 @@ function NodeRow({
   path,
   connected,
   selectedKey,
+  selectedSchema,
   onPick,
   onContextMenu,
   expanded,
@@ -111,6 +138,7 @@ function NodeRow({
   path: string[]
   connected: boolean
   selectedKey: string
+  selectedSchema: string
   onPick: Props['onPick']
   onContextMenu?: Props['onContextMenu']
   expanded: Set<string>
@@ -126,14 +154,20 @@ function NodeRow({
   const expandable = canExpand(node)
   const isFolder = node.kind === 'folder'
   const selected = selectedKey === key
+  // Keep current workbench catalog marked even when a child table/folder is selected.
+  const isCurrentDb =
+    (node.kind === 'schema' || node.kind === 'database') &&
+    !!selectedSchema &&
+    node.name === selectedSchema
   const isLoading = loading.has(key)
   const err = errors[key] || ''
 
   return (
     <li className={`tree-node depth-${Math.min(path.length, 6)}`}>
       <div
-        className={`tree-row${selected ? ' on' : ''}${isFolder ? ' folder' : ''}`}
+        className={`tree-row${selected ? ' on' : ''}${isCurrentDb ? ' current-db' : ''}${isFolder ? ' folder' : ''}`}
         data-tree-key={key}
+        aria-current={isCurrentDb ? 'true' : undefined}
       >
         {expandable ? (
           <button
@@ -141,7 +175,10 @@ function NodeRow({
             className="tree-twist"
             aria-expanded={isOpen}
             disabled={!connected || isLoading}
-            onClick={() => toggle(path, node)}
+            onClick={() => {
+              if (node.kind === 'schema' || node.kind === 'database') onPick(node, path)
+              toggle(path, node)
+            }}
             title={isOpen ? t('query.collapse') : t('query.expand')}
           >
             {isLoading ? '…' : isOpen ? '−' : '+'}
@@ -163,7 +200,13 @@ function NodeRow({
             onContextMenu(node, path, e.clientX, e.clientY)
           }}
         >
-          <span className={`tree-ico ${icoClass(node)}`} aria-hidden />
+          {node.kind === 'schema' || node.kind === 'database' ? (
+            <span className="tree-ico db" aria-hidden>
+              <DbGlyph />
+            </span>
+          ) : (
+            <span className={`tree-ico ${icoClass(node)}`} aria-hidden />
+          )}
           <span className="tree-name">
             {isFolder ? folderLabel(t, node.name) : node.name}
           </span>
@@ -189,6 +232,7 @@ function NodeRow({
               path={[...path, c.name]}
               connected={connected}
               selectedKey={selectedKey}
+              selectedSchema={selectedSchema}
               onPick={onPick}
               onContextMenu={onContextMenu}
               expanded={expanded}
@@ -399,6 +443,7 @@ export function ObjectTree({ active = true, connectionId, connected, nodes, sele
           path={[n.name]}
           connected={connected}
           selectedKey={selectedKey}
+          selectedSchema={selectedSchema}
           onPick={(node, path) => {
             setSelectedKey(pathKey(path))
             onPick(node, path)

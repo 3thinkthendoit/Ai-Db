@@ -25,3 +25,15 @@ type ConfigStore interface {
 	// Save persists the user's config, encrypting secrets at rest.
 	Save(ctx context.Context, userID string, cfg *config.AppConfig) error
 }
+
+// MutationStore persists query audit rows and DBA mutation requests.
+// Only the server MySQLStore implements it; desktop leaves Service.mutations nil.
+type MutationStore interface {
+	InsertQueryAudit(ctx context.Context, row QueryAuditRow) error
+	ListQueryAudit(ctx context.Context, actorID string, limit int) ([]QueryAuditRow, error)
+	InsertMutation(ctx context.Context, row MutationRow) error
+	GetMutation(ctx context.Context, id string) (*MutationRow, error)
+	ListMutations(ctx context.Context, ownerID, status string, limit int) ([]MutationRow, error)
+	UpdateMutation(ctx context.Context, row MutationRow) error
+	ClaimMutationStatus(ctx context.Context, id, fromStatus, toStatus, reviewerID, reviewerName string) (bool, error)
+}

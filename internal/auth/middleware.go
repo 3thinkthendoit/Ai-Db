@@ -2,6 +2,7 @@ package auth
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"net/http"
 
@@ -101,8 +102,19 @@ func writeBanned(w http.ResponseWriter) {
 // Role values stored on users.role and carried in app.Principal.Role.
 const (
 	RoleAdmin = "admin"
+	RoleDBA   = "dba"
 	RoleUser  = "user"
 )
+
+// ValidAccountRole reports whether role is one of the three account roles.
+func ValidAccountRole(role string) bool {
+	switch role {
+	case RoleAdmin, RoleDBA, RoleUser:
+		return true
+	default:
+		return false
+	}
+}
 
 // RequireAdmin rejects any principal that is not an admin with 403. It must wrap
 // a handler that runs AFTER Middleware/Gate (which injects the principal), e.g.
@@ -116,15 +128,36 @@ func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := PrincipalFromContext(r.Context())
 		if !ok || p.Role != RoleAdmin {
-			writeForbidden(w)
+			writeForbidden(w, "forbidden: admin only")
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
 }
 
-func writeForbidden(w http.ResponseWriter) {
+// RequireDBA rejects any principal that is not a DBA with 403. Used for SQL
+// mutation approval, rollback, and cross-tenant audit/review endpoints.
+func RequireDBA(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := PrincipalFromContext(r.Context())
+		if !ok || p.Role != RoleDBA {
+			writeForbidden(w, "forbidden: dba only")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+func writeForbidden(w http.ResponseWriter, msg string) {
+	if msg == "" {
+		msg = "forbidden"
+	}
 	w.Header().Set("Content-Type", "application/json; charset=utf-8")
 	w.WriteHeader(http.StatusForbidden)
-	_, _ = w.Write([]byte(`{"error":"forbidden: admin only"}`))
+	b, err := json.Marshal(map[string]string{"error": msg})
+	if err != nil {
+		_, _ = w.Write([]byte(`{"error":"forbidden"}`))
+		return
+	}
+	_, _ = w.Write(b)
 }

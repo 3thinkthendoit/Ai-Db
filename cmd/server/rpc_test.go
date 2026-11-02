@@ -66,9 +66,10 @@ var apiMethods = []string{
 	"SetActiveSchema", "IsMutatingQuery", "WritesAllowed", "GetLLMConfig",
 	"ListLLMProfiles", "SaveLLMProfile", "DeleteLLMProfile", "ActivateLLMProfile",
 	"SaveLLMSafety", "TestLLMProfile", "SaveLLMConfig", "AgentChat",
+	"ListMutations", "ListQueryAudit", "ApproveMutation", "RejectMutation", "RollbackMutation",
 }
 
-// TestRegisterAPIRoutes verifies all 23 endpoints register on the ServeMux
+// TestRegisterAPIRoutes verifies all bound endpoints register on the ServeMux
 // without a pattern conflict (Go 1.22 mux panics at registration on conflict)
 // and that the session gate rejects unauthenticated calls with 401 — proving the
 // routes exist (a 404 would mean the pattern never registered).
@@ -77,8 +78,8 @@ func TestRegisterAPIRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux) // must not panic
 
-	if len(apiMethods) != 23 {
-		t.Fatalf("expected 23 bound methods, got %d", len(apiMethods))
+	if len(apiMethods) != 28 {
+		t.Fatalf("expected 28 API methods, got %d", len(apiMethods))
 	}
 	for _, m := range apiMethods {
 		req := httptest.NewRequest(http.MethodPost, "/api/"+m, strings.NewReader(`{"args":[]}`))

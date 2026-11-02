@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import './App.css'
 import logoSrc from './assets/logo.svg'
 import { ConnectionForm } from './components/ConnectionForm'
+import { ConnTypeIcon, connTypeLabel } from './components/ConnTypeIcon'
 import { PickConnectionModal } from './components/PickConnectionModal'
+import { DbToolTopNav } from './components/DbToolTopNav'
 import { SettingsMenu } from './components/SettingsMenu'
 import { TasksSidebar } from './components/TasksSidebar'
 import { AgentWorkspace } from './pages/AgentWorkspace'
@@ -10,10 +12,13 @@ import { ConnectionsView } from './pages/ConnectionsView'
 import { PrefsView } from './pages/PrefsView'
 import { QueryView } from './pages/QueryView'
 import { AdminView } from './pages/AdminView'
+import { DbaReviewView } from './pages/DbaReviewView'
 import { ProfileView } from './pages/ProfileView'
 import { SettingsView } from './pages/SettingsView'
 import { AccountSession, AppMode, ChatMessage, Connection, ObjectNode, emptyConnection } from './types'
 import { useI18n } from './i18n'
+import { ensureDbtoolDefault, getUiEdition, type UiEdition } from './uiEdition'
+import { isDesktop } from './lib/api'
 import {
   createTask,
   loadActiveTaskId,
@@ -90,19 +95,42 @@ function App({ account }: AppProps) {
   const [pickConnPurpose, setPickConnPurpose] = useState<null | 'query' | 'agent'>(null)
   /** Agent 未选库发送时暂存文案，选完库后交回 AgentWorkspace 续发。 */
   const [pendingAgentSend, setPendingAgentSend] = useState<string | null>(null)
-  const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>('agent')
+  const [uiEdition, setUiEditionState] = useState<UiEdition>(() => {
+    if (isDesktop()) return 'agent'
+    ensureDbtoolDefault()
+    return getUiEdition()
+  })
+  const [workSurface, setWorkSurface] = useState<'agent' | 'sql'>(() => {
+    if (isDesktop()) return 'agent'
+    ensureDbtoolDefault()
+    return getUiEdition() === 'dbtool' ? 'sql' : 'agent'
+  })
   const [activeSchema, setActiveSchema] = useState('')
   /** Last schema successfully applied to the live driver (UI revert target). */
   const appliedSchemaRef = useRef('')
   /** Source of truth for in-flight history reads; avoid `ref = state` each render (clobbers optimistic writes). */
   const tasksRef = useRef(tasks)
   const [schemaMenuOpen, setSchemaMenuOpen] = useState(false)
+  const [nodeMenuOpen, setNodeMenuOpen] = useState(false)
   const schemaMenuRoot = useRef<HTMLDivElement>(null)
+  const nodeMenuRoot = useRef<HTMLDivElement>(null)
 
   const persistTasks = useCallback((next: Task[]) => {
     tasksRef.current = next
     setTasks(next)
     saveTasks(next)
+  }, [])
+
+  useEffect(() => {
+    function onEdition(e: Event) {
+      const v = (e as CustomEvent<UiEdition>).detail
+      if (v !== 'agent' && v !== 'dbtool') return
+      setUiEditionState(v)
+      setWorkSurface(v === 'dbtool' ? 'sql' : 'agent')
+      setMode('work')
+    }
+    window.addEventListener('aidb-ui-edition', onEdition)
+    return () => window.removeEventListener('aidb-ui-edition', onEdition)
   }, [])
 
   const selectTask = useCallback((id: string) => {
@@ -158,8 +186,12 @@ function App({ account }: AppProps) {
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
-      if (schemaMenuRoot.current && !schemaMenuRoot.current.contains(e.target as Node)) {
+      const t = e.target as Node
+      if (schemaMenuRoot.current && !schemaMenuRoot.current.contains(t)) {
         setSchemaMenuOpen(false)
+      }
+      if (nodeMenuRoot.current && !nodeMenuRoot.current.contains(t)) {
+        setNodeMenuOpen(false)
       }
     }
     document.addEventListener('mousedown', onDoc)
@@ -347,6 +379,7 @@ function App({ account }: AppProps) {
     setActiveConnId('')
     setActiveSchema('')
     setSchemaMenuOpen(false)
+    setNodeMenuOpen(false)
     setPickConnPurpose(null)
     setPendingAgentSend(null)
     setMode('work')
@@ -355,6 +388,27 @@ function App({ account }: AppProps) {
 
   function handleNewTask() {
     goHomeClearConnection()
+  }
+
+  function selectWorkNode(id: string) {
+    setNodeMenuOpen(false)
+    setSchemaMenuOpen(false)
+    setBanner('')
+    if (!id || id === workConnId) return
+    // Agent 任务已有对话时不可换绑连接（与 AgentWorkspace 一致）；Query 面允许切换。
+    if (activeTask && activeTask.connectionId !== id) {
+      if (workSurface !== 'sql' && activeTask.messages.length > 0) {
+        setBanner(t('work.node.taskLocked'))
+        return
+      }
+      persistTasks(
+        tasksRef.current.map((task) =>
+          task.id === activeTask.id ? touchTask(task, { connectionId: id }) : task
+        )
+      )
+    }
+    setActiveConnId(id)
+    if (workSurface === 'sql') void handleConnect(id)
   }
 
   function ensureTask(connectionId: string): string {
@@ -486,10 +540,27 @@ function App({ account }: AppProps) {
   const workspaceHistory = activeTask?.messages || []
 
   // SQL 查询占满主区：隐藏任务侧栏（新建任务 / 会话列表 / 设置入口）。
-  const hideTaskSidebar = mode === 'work' && workSurface === 'sql'
+  // DB 工具版始终无任务侧栏；Web 登录态始终用顶部导航放连接 / LLM / 用户等入口。
+  const dbtool = uiEdition === 'dbtool'
+  const webTopNav = !isDesktop() && !!account
+  const hideTaskSidebar =
+    dbtool || (mode === 'work' && workSurface === 'sql')
 
   return (
-    <div className={`layout${hideTaskSidebar ? ' sql-focus' : ''}`}>
+    <div className={`layout${hideTaskSidebar ? ' sql-focus' : ''}${webTopNav ? ' dbtool-edition' : ''}`}>
+      {webTopNav && (
+        <DbToolTopNav
+          activePage={menuActivePage}
+          onPage={openWorkPage}
+          account={{
+            username: account.username,
+            role: account.role,
+            displayName: account.displayName,
+            avatar: account.avatar,
+            onLogout: account.onLogout,
+          }}
+        />
+      )}
       {!hideTaskSidebar && (
         <aside className="sidebar">
           <div className="brand">
@@ -564,45 +635,80 @@ function App({ account }: AppProps) {
             {(workSurface === 'sql' || !!activeTask) && (
               <header className="work-bar">
                 <div className="work-bar-left">
-                  {hideTaskSidebar && (
+                  <div className="host-menu-wrap work-bar-node-pick" ref={nodeMenuRoot}>
                     <button
                       type="button"
-                      className="work-home-btn"
-                      title={t('work.home.hint')}
-                      onClick={() => goHomeClearConnection()}
+                      className={`tool-pill meta-btn work-node-btn${nodeMenuOpen ? ' open' : ''}${activeConn ? '' : ' muted'}`}
+                      title={
+                        activeConn
+                          ? t('work.node.hint', { name: `${activeConn.name} · ${connTypeLabel(activeConn.type)}` })
+                          : t('work.node.pick')
+                      }
+                      onClick={() => {
+                        setSchemaMenuOpen(false)
+                        setNodeMenuOpen((v) => !v)
+                      }}
                     >
-                      <svg width="15" height="15" viewBox="0 0 24 24" aria-hidden="true">
-                        <path
-                          d="M4 11.5 12 4l8 7.5 M7 10.5V20h10v-9.5"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="1.7"
-                          strokeLinecap="round"
-                          strokeLinejoin="round"
-                        />
-                      </svg>
-                      <span>{t('work.home')}</span>
+                      <span className="work-bar-node-caption">{t('work.node')}</span>
+                      {activeConn ? (
+                        <ConnTypeIcon type={activeConn.type} size={14} />
+                      ) : (
+                        <span className="work-bar-node-ico-placeholder" aria-hidden />
+                      )}
+                      <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
+                      <strong className="work-bar-node-label">
+                        {activeConn
+                          ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
+                          : t('work.node.offline')}
+                      </strong>
+                      <span className="caret-down">{nodeMenuOpen ? '▴' : '▾'}</span>
                     </button>
-                  )}
-                  <div
-                    className={`work-bar-node${activeConn ? '' : ' muted'}`}
-                    title={
-                      activeConn
-                        ? `${activeConn.name} · ${activeConn.type} · ${activeConn.host}:${activeConn.port}`
-                        : t('work.node.offline')
-                    }
-                  >
-                    <svg className="meta-ico" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
-                      <ellipse cx="12" cy="6" rx="7" ry="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                      <path d="M5 6v6c0 1.7 3.1 3 7 3s7-1.3 7-3V6" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                      <path d="M5 12v6c0 1.7 3.1 3 7 3s7-1.3 7-3v-6" fill="none" stroke="currentColor" strokeWidth="1.7" />
-                    </svg>
-                    <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
-                    <span className="work-bar-node-label">
-                      {activeConn
-                        ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
-                        : t('work.node.offline')}
-                    </span>
+                    {nodeMenuOpen && (
+                      <div className="host-menu" role="listbox">
+                        {connections.length === 0 ? (
+                          <button
+                            type="button"
+                            className="model-menu-item"
+                            onClick={() => {
+                              setNodeMenuOpen(false)
+                              setMode('connections')
+                            }}
+                          >
+                            {t('work.db.empty')}
+                          </button>
+                        ) : (
+                          <>
+                            {connections.map((c) => (
+                              <button
+                                key={c.id}
+                                type="button"
+                                className={`model-menu-item work-node-menu-item${c.id === workConnId ? ' on' : ''}`}
+                                onClick={() => selectWorkNode(c.id)}
+                              >
+                                <ConnTypeIcon type={c.type} size={14} />
+                                <span className={`conn-dot${connectedIds.has(c.id) ? ' on' : ''}`} />
+                                <span className="work-node-menu-text">
+                                  <span className="work-node-menu-name">{c.name}</span>
+                                  <span className="work-node-menu-meta">
+                                    {connTypeLabel(c.type)} · {c.host}:{c.port}
+                                  </span>
+                                </span>
+                              </button>
+                            ))}
+                            <button
+                              type="button"
+                              className="model-menu-item work-node-menu-manage"
+                              onClick={() => {
+                                setNodeMenuOpen(false)
+                                setMode('connections')
+                              }}
+                            >
+                              {t('work.db.manage')}
+                            </button>
+                          </>
+                        )}
+                      </div>
+                    )}
                   </div>
                   <div className="host-menu-wrap work-bar-schema-pick" ref={schemaMenuRoot}>
                     <button
@@ -610,7 +716,10 @@ function App({ account }: AppProps) {
                       className={`tool-pill meta-btn work-schema-btn${schemaMenuOpen ? ' open' : ''}`}
                       title={activeSchema ? t('work.schema.hint', { name: activeSchema }) : t('work.schema.pick')}
                       disabled={!workConnId || !connectedIds.has(workConnId)}
-                      onClick={() => setSchemaMenuOpen((v) => !v)}
+                      onClick={() => {
+                        setNodeMenuOpen(false)
+                        setSchemaMenuOpen((v) => !v)
+                      }}
                     >
                       <span className="work-bar-schema-label">{t('work.schema')}</span>
                       <strong className="work-bar-schema-name">{activeSchema || t('work.schema.pick')}</strong>
@@ -732,6 +841,7 @@ function App({ account }: AppProps) {
         {mode === 'admin' && account?.role === 'admin' && (
           <AdminView selfUsername={account.username} />
         )}
+        {mode === 'dba' && account?.role === 'dba' && <DbaReviewView />}
       </main>
 
       {pickConnPurpose && (

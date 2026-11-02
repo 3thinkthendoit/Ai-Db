@@ -272,6 +272,7 @@ export function AdminView({ selfUsername }: Props) {
                   onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
                 >
                   <option value="user">user</option>
+                  <option value="dba">dba</option>
                   <option value="admin">admin</option>
                 </select>
               </label>
@@ -326,6 +327,7 @@ export function AdminView({ selfUsername }: Props) {
                   onChange={(e) => setEditing({ ...editing, role: e.target.value })}
                 >
                   <option value="user">user</option>
+                  <option value="dba">dba</option>
                   <option value="admin">admin</option>
                 </select>
               </label>

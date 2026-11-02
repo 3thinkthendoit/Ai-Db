@@ -12,6 +12,7 @@ const PAGE_ICONS: Record<string, string> = {
   settings: 'M12 8a4 4 0 1 0 0 8 4 4 0 0 0 0-8z M12 2v2 M12 20v2 M4.9 4.9l1.4 1.4 M17.7 17.7l1.4 1.4 M2 12h2 M20 12h2 M4.9 19.1l1.4-1.4 M17.7 6.3l1.4-1.4',
   profile: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5',
   admin: 'M8 10V8a4 4 0 1 1 8 0v2 M6 10h12v10H6z',
+  dba: 'M4 6h16v4H4z M4 14h16v4H4z M8 8v0.01 M8 16v0.01',
   logout: 'M10 4H6a2 2 0 0 0-2 2v12a2 2 0 0 0 2 2h4 M15 16l4-4-4-4 M10 12h9',
 }
 
@@ -44,7 +45,10 @@ export function SettingsMenu({ activePage, onPage, account }: Props) {
   ]
 
   const gearActive =
-    pages.some((p) => p.key === activePage) || activePage === 'profile' || activePage === 'admin'
+    pages.some((p) => p.key === activePage) ||
+    activePage === 'profile' ||
+    activePage === 'admin' ||
+    activePage === 'dba'
 
   useEffect(() => {
     function onDoc(e: MouseEvent) {
@@ -136,6 +140,26 @@ export function SettingsMenu({ activePage, onPage, account }: Props) {
                   <path d={CHEVRON} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
                 </svg>
               </button>
+              {account.role === 'dba' && (
+                <button
+                  type="button"
+                  className={`sm-page${activePage === 'dba' ? ' on' : ''}`}
+                  onClick={() => {
+                    setOpen(false)
+                    onPage('dba')
+                  }}
+                >
+                  <span className="sm-page-label">
+                    <svg className="sm-page-ico" width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
+                      <path d={PAGE_ICONS.dba} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+                    </svg>
+                    <span>{t('menu.page.dba')}</span>
+                  </span>
+                  <svg className="sm-arrow" width="14" height="14" viewBox="0 0 24 24" aria-hidden="true">
+                    <path d={CHEVRON} fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" />
+                  </svg>
+                </button>
+              )}
               {account.role === 'admin' && (
                 <button
                   type="button"

@@ -3,6 +3,104 @@
   height: 100%;
 }
 
+.layout.dbtool-edition {
+  flex-direction: column;
+}
+
+.dbtool-topnav {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 14px;
+  height: 48px;
+  border-bottom: 1px solid var(--border);
+  background: var(--surface-2);
+  z-index: 20;
+}
+
+.dbtool-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 0;
+  background: transparent;
+  color: var(--text);
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+.dbtool-brand:hover {
+  background: color-mix(in srgb, var(--accent, #3b82f6) 12%, transparent);
+}
+.dbtool-brand-mark {
+  width: 26px;
+  height: 26px;
+  border-radius: 6px;
+  display: block;
+}
+.dbtool-brand-title {
+  font-weight: 700;
+  font-size: 14px;
+  letter-spacing: 0.02em;
+}
+.dbtool-brand-tag {
+  font-size: 11px;
+  color: var(--text-3);
+  padding: 2px 7px;
+  border-radius: 999px;
+  border: 1px solid var(--border);
+}
+
+.dbtool-nav {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex: 1;
+  min-width: 0;
+  overflow-x: auto;
+}
+
+.dbtool-account {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex-shrink: 0;
+  margin-left: auto;
+}
+
+.dbtool-nav-btn {
+  border: 0;
+  background: transparent;
+  color: var(--text-2);
+  font-size: 13px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dbtool-nav-btn:hover {
+  color: var(--text);
+  background: color-mix(in srgb, var(--text) 6%, transparent);
+}
+.dbtool-nav-btn.on {
+  color: var(--text);
+  background: color-mix(in srgb, var(--accent, #3b82f6) 14%, transparent);
+  font-weight: 600;
+}
+.dbtool-nav-btn.danger {
+  color: var(--danger, #dc2626);
+}
+.dbtool-nav-btn.danger:hover {
+  background: color-mix(in srgb, var(--danger, #dc2626) 10%, transparent);
+}
+
+.layout.dbtool-edition > .main {
+  flex: 1;
+  min-height: 0;
+}
+
 .sidebar {
   width: 240px;
   flex-shrink: 0;
@@ -123,7 +221,8 @@
   border: 1px solid var(--border);
 }
 [data-theme='light'] .work-home-btn,
-[data-theme='light'] .work-bar-schema-pick .work-schema-btn {
+[data-theme='light'] .work-bar-schema-pick .work-schema-btn,
+[data-theme='light'] .work-bar-node-pick .work-node-btn {
   min-height: 28px;
   height: 28px;
   border-radius: 6px;
@@ -134,7 +233,9 @@
 }
 [data-theme='light'] .work-home-btn:hover:not(:disabled),
 [data-theme='light'] .work-bar-schema-pick .work-schema-btn:hover:not(:disabled),
-[data-theme='light'] .work-bar-schema-pick .work-schema-btn.open {
+[data-theme='light'] .work-bar-schema-pick .work-schema-btn.open,
+[data-theme='light'] .work-bar-node-pick .work-node-btn:hover:not(:disabled),
+[data-theme='light'] .work-bar-node-pick .work-node-btn.open {
   background: #efefef;
   border-color: #bdbdbd;
 }
@@ -668,13 +769,20 @@
 .tag.danger { background: var(--danger-bg); color: var(--danger); }
 .tag.mysql,
 .tag.postgres,
-.tag.redis {
+.tag.redis,
+.tag.mongo {
   font-weight: 600;
   letter-spacing: 0.02em;
 }
 .tag.mysql { background: var(--db-mysql-bg); color: var(--db-mysql); }
 .tag.postgres { background: var(--db-postgres-bg); color: var(--db-postgres); }
 .tag.redis { background: var(--db-redis-bg); color: var(--db-redis); }
+.tag.mongo { background: var(--db-mongo-bg); color: var(--db-mongo); }
+.conn-type-ico {
+  flex-shrink: 0;
+  display: block;
+  border-radius: 3.5px;
+}
 .mono { font-family: var(--mono); }
 
 .conn-wrap {
@@ -878,26 +986,81 @@
   color: var(--text);
 }
 .work-bar-host.muted { color: var(--text-3); font-weight: 400; }
-.work-bar-node {
+.work-bar-node-caption {
+  color: var(--text-3);
+  flex-shrink: 0;
+  font-size: 12px;
+  font-weight: 500;
+}
+.work-bar-node-pick .work-node-btn {
   display: inline-flex;
   align-items: center;
   gap: 8px;
   min-width: 0;
-  max-width: min(420px, 48vw);
-  padding: 6px 12px;
+  max-width: min(480px, 52vw);
   border: 1px solid var(--border);
-  border-radius: 8px;
   background: var(--surface-2);
-  color: var(--text);
+  border-radius: 8px;
+  padding: 6px 12px;
   font-size: 13px;
+  color: var(--text);
+  cursor: pointer;
 }
-.work-bar-node.muted { color: var(--text-3); }
+.work-bar-node-pick .work-node-btn.muted { color: var(--text-3); }
+.work-bar-node-pick .work-node-btn:hover:not(:disabled),
+.work-bar-node-pick .work-node-btn.open {
+  background: var(--surface);
+  border-color: var(--border-strong);
+}
 .work-bar-node-label {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-  font-weight: 500;
+  font-weight: 600;
+}
+.work-bar-node-ico-placeholder {
+  width: 14px;
+  height: 14px;
+  border-radius: 3.5px;
+  background: var(--border);
+  flex-shrink: 0;
+}
+.work-bar-node-pick .host-menu {
+  top: calc(100% + 6px);
+  bottom: auto;
+  min-width: 260px;
+  max-width: min(480px, 90vw);
+}
+.work-node-menu-item {
+  display: flex !important;
+  align-items: center;
+  gap: 8px;
+  text-align: left;
+}
+.work-node-menu-text {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  gap: 1px;
+}
+.work-node-menu-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-node-menu-meta {
+  font-size: 11px;
+  color: var(--text-3);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.work-node-menu-manage {
+  border-top: 1px solid var(--border);
+  color: var(--accent);
+  font-weight: 600;
 }
 .work-bar-schema-pick .work-schema-btn {
   display: inline-flex;
@@ -1332,9 +1495,40 @@ body.query-side-splitting {
   background: color-mix(in srgb, var(--accent) 22%, transparent);
 }
 [data-theme='light'] .tree-row.on {
-  background: #e8e8e8;
+  background: color-mix(in srgb, var(--accent, #2563eb) 16%, #fff);
 }
 .tree-row.on .tree-item { color: var(--text); }
+/* Workbench current database/schema — solid row fill (tree-item must stay transparent). */
+.tree-row.current-db {
+  background: var(--accent-bg);
+}
+.tree-row.current-db:hover {
+  background: color-mix(in srgb, var(--accent) 22%, var(--accent-bg));
+}
+.tree-row.current-db .tree-name {
+  font-weight: 650;
+  color: var(--text);
+}
+.tree-row.current-db .tree-item,
+.tree-row.current-db .tree-item:hover {
+  background: transparent !important;
+  border-color: transparent !important;
+  box-shadow: none !important;
+}
+.tree-row.current-db button.tree-twist {
+  background: color-mix(in srgb, var(--accent) 12%, var(--surface));
+  border-color: color-mix(in srgb, var(--accent) 35%, var(--border));
+}
+[data-theme='light'] .tree-row.current-db {
+  background: #d6e8ff;
+}
+[data-theme='light'] .tree-row.current-db:hover {
+  background: #c5ddff;
+}
+[data-theme='light'] .tree-row.current-db button.tree-twist {
+  background: #e8f1ff;
+  border-color: #9ec2f0;
+}
 /* Use button.tree-twist so theme button rules cannot win on specificity. */
 button.tree-twist,
 .tree-twist {
@@ -1382,26 +1576,33 @@ button.tree-twist:hover:not(:disabled),
   background: #efefef;
   border-color: #bdbdbd;
 }
+button.tree-item,
 .tree-item {
   flex: 1;
   min-width: 0;
   text-align: left;
-  border: 0;
-  background: transparent;
+  border: 0 !important;
+  background: transparent !important;
   color: var(--text);
-  padding: 3px 6px;
+  padding: 3px 6px !important;
   border-radius: 4px;
   cursor: pointer;
   font-size: 12.5px;
   font-family: var(--mono);
   font-weight: 500;
-  min-height: 0;
+  min-height: 0 !important;
+  height: auto !important;
   display: inline-flex;
   align-items: center;
   gap: 6px;
   justify-content: flex-start;
+  box-shadow: none !important;
 }
-.tree-item:hover { background: transparent; }
+button.tree-item:hover,
+.tree-item:hover {
+  background: transparent !important;
+  border-color: transparent !important;
+}
 .tree-item .kind {
   color: var(--text-3);
   text-transform: uppercase;
@@ -1468,11 +1669,20 @@ button.tree-twist:hover:not(:disabled),
   content: '';
   pointer-events: none;
 }
+/* Database glyph is an inline SVG (.tree-ico-db-svg); keep slot transparent. */
 .tree-ico.db {
-  border-radius: 50%;
-  background: #3b82f6;
+  border-radius: 0 !important;
+  background: transparent !important;
+  color: var(--text);
 }
-.tree-ico.db::after { content: none; }
+.tree-ico.db::after { content: none !important; }
+.tree-ico-db-svg {
+  width: 14px;
+  height: 14px;
+  display: block;
+  flex-shrink: 0;
+  color: var(--text);
+}
 .tree-ico.group {
   background: transparent;
   border: 1px solid var(--border-strong);
@@ -1554,7 +1764,7 @@ button.tree-twist:hover:not(:disabled),
 }
 .tree-ico.key::after { content: 'K'; }
 [data-theme='light'] .tree-ico.db {
-  background: #007aff;
+  background: transparent !important;
 }
 [data-theme='light'] .tree-ico.table {
   background: #007aff;
@@ -3706,5 +3916,25 @@ button.login-submit.primary:active:not(:disabled) {
     max-width: 380px;
     padding: 12px 0 24px;
   }
+}
+
+/* DBA review */
+.sql-preview {
+  margin: 8px 0;
+  padding: 8px 10px;
+  max-height: 160px;
+  overflow: auto;
+  font-family: var(--mono, ui-monospace, SFMono-Regular, Menlo, Consolas, monospace);
+  font-size: 12px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  background: color-mix(in srgb, var(--panel, #fff) 88%, #64748b 12%);
+  border-radius: 6px;
+}
+.card-actions {
+  display: flex;
+  gap: 8px;
+  margin-top: 10px;
+  flex-wrap: wrap;
 }
 

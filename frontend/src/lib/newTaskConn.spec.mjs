@@ -41,7 +41,8 @@ function makeResumeGuard() {
 
 assert(/function goHomeClearConnection\(/.test(app), '存在 goHomeClearConnection')
 assert(/function handleNewTask\(/.test(app) && /goHomeClearConnection\(\)/.test(app), '新建任务走 goHomeClearConnection')
-assert(/onClick=\{\(\) => goHomeClearConnection\(\)\}/.test(app), 'Home 按钮走 goHomeClearConnection')
+assert(!/work-home-btn/.test(app), '工作栏不再放首页按钮')
+assert(/work\.node/.test(app), '工作栏展示当前节点')
 assert(/setActiveConnId\(''\)/.test(app) && /setPendingAgentSend\(null\)/.test(app), '回首页清连接与 pending')
 assert(!/NewTaskModal/.test(app), 'App 不再引用 NewTaskModal')
 assert(!/if \(!activeConnId && list\?\.length\) setActiveConnId\(list\[0\]\.id\)/.test(app), 'reload 不得自动选第一个连接')

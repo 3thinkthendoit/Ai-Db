@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Connection } from '../types'
 import { useI18n } from '../i18n'
 import { TestConnection } from '../lib/api'
+import { ConnTypeIcon, connTypeLabel } from '../components/ConnTypeIcon'
 
 interface Props {
   connections: Connection[]
@@ -14,14 +15,6 @@ interface Props {
 }
 
 type TestResult = { ok: boolean; message: string }
-
-function typeLabel(t: string) {
-  if (t === 'mysql') return 'MySQL'
-  if (t === 'postgres') return 'PostgreSQL'
-  if (t === 'redis') return 'Redis'
-  if (t === 'mongo') return 'MongoDB'
-  return t
-}
 
 function addrLine(c: Connection) {
   const auth = c.user ? `${c.user}@` : ''
@@ -84,8 +77,9 @@ export function ConnectionsView(props: Props) {
             >
               <div className="conn-card-main">
                 <div className="conn-card-name">
+                  <ConnTypeIcon type={c.type} size={16} />
                   {c.name}
-                  <span className={`tag ${c.type}`}>{typeLabel(c.type)}</span>
+                  <span className={`tag ${c.type}`}>{connTypeLabel(c.type)}</span>
                   {live && <span className="tag ok">{t('conn.liveTag')}</span>}
                   {!c.passwordSet && c.type !== 'redis' && (
                     <span className="tag danger">{t('conn.noSecret')}</span>

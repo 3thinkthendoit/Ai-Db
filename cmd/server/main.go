@@ -137,10 +137,12 @@ func run(ctx context.Context) error {
 	queryTimeout := durEnv("AIDB_QUERY_TIMEOUT", 30*time.Second)
 
 	svc := app.NewService(st, mgr)
+	svc.SetMutationStore(st)
 	svc.SetHardening(app.Hardening{
 		Egress:              policy,
 		QueryTimeout:        queryTimeout,
 		RequireExplicitHost: true, // never silently default a host to 127.0.0.1 on the server
+		MutationGate:        true, // audit queries; DBA-approve writes; agent read-only
 	})
 	log.Printf("hardening: query timeout %s, conns max %d/user %d global, idle reap %s",
 		queryTimeout, limits.MaxPerOwner, limits.MaxGlobal, limits.IdleTTL)
@@ -376,8 +378,8 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	if role == "" {
 		role = auth.RoleUser
 	}
-	if role != auth.RoleAdmin && role != auth.RoleUser {
-		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin or user"})
+	if !auth.ValidAccountRole(role) {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin, dba, or user"})
 		return
 	}
 	if _, err := s.users.ByUsername(r.Context(), body.Username); err == nil {

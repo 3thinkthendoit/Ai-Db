@@ -50,8 +50,8 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	banned := u.Banned
 	if body.Role != nil {
 		role = strings.TrimSpace(*body.Role)
-		if role != auth.RoleAdmin && role != auth.RoleUser {
-			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin or user"})
+		if !auth.ValidAccountRole(role) {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin, dba, or user"})
 			return
 		}
 	}

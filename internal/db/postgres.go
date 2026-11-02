@@ -170,6 +170,20 @@ func (d *postgresDriver) Execute(ctx context.Context, query string, maxRows int,
 	return execSQL(ctx, d.pool(), query, maxRows, allowWrites)
 }
 
+// ExecuteDMLSnapshot runs rollbackable DML with a before-image (Postgres).
+func (d *postgresDriver) ExecuteDMLSnapshot(ctx context.Context, query string) (*QueryResult, *RowSnapshot, error) {
+	return ExecuteDMLWithSnapshot(ctx, d.pool(), "", query, "postgres")
+}
+
+// ExecuteRollbackSnapshot applies compensating SQL from a snapshot (Postgres).
+func (d *postgresDriver) ExecuteRollbackSnapshot(ctx context.Context, snap *RowSnapshot) (*QueryResult, error) {
+	stmts, err := BuildRollbackSQL(snap)
+	if err != nil {
+		return nil, err
+	}
+	return ExecuteRollbackSQL(ctx, d.pool(), "", stmts)
+}
+
 // ListSchemas lists PostgreSQL databases (UI / agent 「库」), matching MySQL semantics.
 func (d *postgresDriver) ListSchemas(ctx context.Context) ([]string, error) {
 	res, err := execSQL(ctx, d.pool(),

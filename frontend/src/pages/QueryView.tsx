@@ -5,7 +5,7 @@ import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
 import { ObjectNode, QueryResult } from '../types'
-import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed } from '../lib/api'
+import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed, isDesktop } from '../lib/api'
 import { useI18n } from '../i18n'
 import { BodyPortal } from '../lib/portal'
 import {
@@ -617,7 +617,9 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           patchTab(tabId, { error: t('query.writeBlocked') })
           return
         }
-        if (!window.confirm(t('query.writeConfirm'))) {
+        // Server mutation gate: confirm submits for DBA approval (not immediate exec).
+        const confirmMsg = !isDesktop() ? t('query.writeSubmitConfirm') : t('query.writeConfirm')
+        if (!window.confirm(confirmMsg)) {
           return
         }
       }
@@ -632,14 +634,18 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       const res = await ExecuteQuery(runConn, nextSql)
       if (connRef.current !== runConn) return
       patchTab(tabId, { error: '' })
-      commitQueryResult(preferredResultId, res as unknown as QueryResult)
+      const qr = res as unknown as QueryResult
+      commitQueryResult(preferredResultId, qr)
+      if (qr.columns?.[0] === 'status' && qr.rows?.[0]?.[0] === 'pending_approval') {
+        flash(t('query.pendingApproval', { id: qr.rows[0][1] || '' }))
+      }
       // Keep work-bar schema in sync after mongosh `use <db>`.
       if (connType === 'mongo') {
         const useMatch = nextSql.trim().match(/^use\s+([A-Za-z_][\w$-]*)\s*;?\s*$/i)
         if (useMatch) onActiveSchemaChange?.(useMatch[1])
       }
-      // 建表/删对象等写操作成功后刷新左侧对象树。
-      if (mutating) onRefreshObjects()
+      // 建表/删对象等写操作成功后刷新左侧对象树（审批挂起时无需刷新）。
+      if (mutating && qr.rows?.[0]?.[0] !== 'pending_approval') onRefreshObjects()
     } catch (e: any) {
       if (connRef.current !== runConn) return
       // Failures stay on the editor toolbar — do not spawn empty result tabs.

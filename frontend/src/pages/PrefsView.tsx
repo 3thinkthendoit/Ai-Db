@@ -13,7 +13,8 @@ import {
 import { useI18n } from '../i18n'
 import { getTheme, setTheme, type Theme } from '../theme'
 import { LLMConfig } from '../types'
-import { GetLLMConfig, SaveLLMSafety } from '../lib/api'
+import { GetLLMConfig, SaveLLMSafety, isDesktop } from '../lib/api'
+import { getUiEdition, setUiEdition, type UiEdition } from '../uiEdition'
 
 const DEFAULT_MAX_ROWS = 500
 const DEFAULT_MAX_STEPS = 12
@@ -36,6 +37,8 @@ export function PrefsView() {
   })
   const [safetyLoaded, setSafetyLoaded] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [edition, setEdition] = useState<UiEdition>(() => getUiEdition())
+  const web = !isDesktop()
 
   useEffect(() => {
     void GetLLMConfig()
@@ -174,6 +177,42 @@ export function PrefsView() {
         </div>
       </section>
 
+      {web && (
+        <section className="block">
+          <div className="block-label">{t('prefs.uiEdition')}</div>
+          <div className="stack">
+            <div className="field">
+              <div className="field-meta">
+                <div className="field-title">{t('prefs.uiEdition')}</div>
+                <div className="field-desc">{t('prefs.uiEdition.hint')}</div>
+              </div>
+              <div className="pill-seg" role="group" aria-label={t('prefs.uiEdition')}>
+                <button
+                  type="button"
+                  className={edition === 'agent' ? 'on' : ''}
+                  onClick={() => {
+                    setEdition('agent')
+                    setUiEdition('agent')
+                  }}
+                >
+                  {t('prefs.uiEdition.agent')}
+                </button>
+                <button
+                  type="button"
+                  className={edition === 'dbtool' ? 'on' : ''}
+                  onClick={() => {
+                    setEdition('dbtool')
+                    setUiEdition('dbtool')
+                  }}
+                >
+                  {t('prefs.uiEdition.dbtool')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </section>
+      )}
+
       <section className="block">
         <div className="block-label">{t('prefs.safety')}</div>
         <div className="stack">
@@ -221,7 +260,7 @@ export function PrefsView() {
                 checked={safety.allowWrites}
                 onChange={(e) => setSafety({ ...safety, allowWrites: e.target.checked })}
               />
-              {t('prefs.allowWrites')}
+              {t(web ? 'prefs.allowWrites.server' : 'prefs.allowWrites')}
             </label>
           </div>
         </div>

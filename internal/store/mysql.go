@@ -54,6 +54,26 @@ func (s *MySQLStore) Migrate(ctx context.Context) error {
 	if err := s.ensureUserProfileColumns(ctx); err != nil {
 		return err
 	}
+	if err := s.ensureMutationActiveSchema(ctx); err != nil {
+		return err
+	}
+	return nil
+}
+
+// ensureMutationActiveSchema backfills active_schema on older mutation_requests tables.
+func (s *MySQLStore) ensureMutationActiveSchema(ctx context.Context) error {
+	_, err := s.db.ExecContext(ctx,
+		"ALTER TABLE mutation_requests ADD COLUMN active_schema VARCHAR(128) NOT NULL DEFAULT ''")
+	if err != nil {
+		if isDuplicateColumn(err) {
+			return nil
+		}
+		// Table may not exist yet on brand-new migrate order; ignore missing table.
+		if strings.Contains(err.Error(), "doesn't exist") {
+			return nil
+		}
+		return fmt.Errorf("migrate mutation active_schema: %w", err)
+	}
 	return nil
 }
 

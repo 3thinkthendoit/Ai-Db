@@ -27,13 +27,15 @@ import (
 // instance therefore safely serves every user of the server build, while the
 // desktop build only ever uses the "local" key.
 type Service struct {
-	store store.ConfigStore
-	mgr   *db.Manager
-	agent *agent.Service
+	store     store.ConfigStore
+	mutations store.MutationStore // nil on desktop; server MySQLStore
+	mgr       *db.Manager
+	agent     *agent.Service
 
-	mu        sync.Mutex
-	mem       map[string]*config.AppConfig
-	hardening Hardening
+	mu            sync.Mutex
+	mem           map[string]*config.AppConfig
+	hardening     Hardening
+	activeSchemas map[string]string // connectionID → last SetActiveSchema (mutation gate)
 }
 
 // Hardening carries the server-only safety knobs. The zero value is the desktop
@@ -49,6 +51,16 @@ type Hardening struct {
 	// RequireExplicitHost rejects an empty host instead of defaulting it to
 	// 127.0.0.1, which on a server would ambiguously mean "the server itself".
 	RequireExplicitHost bool
+	// MutationGate enables durable query audit, DBA approval for writes, and
+	// forced read-only agent tools. Desktop leaves this false.
+	MutationGate bool
+}
+
+// SetMutationStore installs the durable audit/mutation repository (server only).
+func (s *Service) SetMutationStore(ms store.MutationStore) {
+	s.mu.Lock()
+	s.mutations = ms
+	s.mu.Unlock()
 }
 
 // SetHardening installs the server safety knobs and forwards the query timeout to
@@ -70,10 +82,11 @@ func (s *Service) SetHardening(h Hardening) {
 // config directory is unwritable.
 func NewService(st store.ConfigStore, mgr *db.Manager) *Service {
 	return &Service{
-		store: st,
-		mgr:   mgr,
-		agent: agent.NewService(mgr),
-		mem:   make(map[string]*config.AppConfig),
+		store:         st,
+		mgr:           mgr,
+		agent:         agent.NewService(mgr),
+		mem:           make(map[string]*config.AppConfig),
+		activeSchemas: make(map[string]string),
 	}
 }
 
@@ -421,9 +434,13 @@ func (s *Service) ExpandObject(ctx context.Context, p Principal, connectionID st
 // ExecuteQuery runs SQL or a Redis command under the caller's safety knobs.
 // Ownership of connectionID is verified first so a tenant can never run queries
 // against another tenant's live driver.
+//
+// When MutationGate is on (server), reads execute and are audited; writes are
+// submitted as pending mutation requests for DBA approval instead of running.
 func (s *Service) ExecuteQuery(ctx context.Context, p Principal, connectionID, query string) (*db.QueryResult, error) {
 	s.mu.Lock()
-	if _, err := s.findConnLocked(ctx, p, connectionID); err != nil {
+	c, err := s.findConnLocked(ctx, p, connectionID)
+	if err != nil {
 		s.mu.Unlock()
 		return nil, err
 	}
@@ -434,11 +451,16 @@ func (s *Service) ExecuteQuery(ctx context.Context, p Principal, connectionID, q
 	}
 	cfg := *loaded
 	timeout := s.hardening.QueryTimeout
+	gate := s.hardening.MutationGate && s.mutations != nil
+	connType := c.Type
 	s.mu.Unlock()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+	if gate {
+		return s.executeQueryGated(ctx, p, connectionID, query, cfg, connType)
 	}
 	drv, release, err := s.mgr.Acquire(connectionID)
 	if err != nil {
@@ -492,15 +514,39 @@ func (s *Service) CreateDatabase(ctx context.Context, p Principal, connectionID 
 		s.mu.Unlock()
 		return nil, err
 	}
-	allowWrites := loaded.LLM.AllowWrites
+	cfg := *loaded
+	allowWrites := cfg.LLM.AllowWrites
 	timeout := s.hardening.QueryTimeout
+	gate := s.hardening.MutationGate && s.mutations != nil
+	connType := c.Type
 	s.mu.Unlock()
 	if !allowWrites {
 		return nil, fmt.Errorf("write/DDL statement blocked (enable Allow Writes in settings): CREATE DATABASE")
 	}
-	steps, err := db.BuildCreateDatabaseStatements(c.Type, spec)
+	steps, err := db.BuildCreateDatabaseStatements(connType, spec)
 	if err != nil {
 		return nil, err
+	}
+	if gate {
+		// Bundle steps into one DDL mutation (not auto-rollbackable).
+		var b strings.Builder
+		for i, step := range steps {
+			if i > 0 {
+				b.WriteString(";\n")
+			}
+			b.WriteString(step.SQL)
+		}
+		out, err := s.executeQueryGated(ctx, p, connectionID, b.String(), cfg, connType)
+		if err != nil {
+			return nil, err
+		}
+		// Not applied yet — must not look like a successful create to the UI.
+		return &db.CreateDatabaseResult{
+			OK:         false,
+			FailedStep: "dba_approval",
+			Error:      out.Message,
+			Completed:  []string{out.Message},
+		}, nil
 	}
 	if timeout > 0 {
 		var cancel context.CancelFunc
@@ -530,10 +576,12 @@ func (s *Service) CreateDatabase(ctx context.Context, p Principal, connectionID 
 func (s *Service) SetActiveSchema(ctx context.Context, p Principal, connectionID, schema string) error {
 	s.mu.Lock()
 	_, err := s.findConnLocked(ctx, p, connectionID)
-	s.mu.Unlock()
 	if err != nil {
+		s.mu.Unlock()
 		return err
 	}
+	s.activeSchemas[connectionID] = strings.TrimSpace(schema)
+	s.mu.Unlock()
 	return s.mgr.SetActiveSchema(connectionID, schema)
 }
 
@@ -936,7 +984,13 @@ func (s *Service) agentChat(ctx context.Context, p Principal, connectionID strin
 		return nil, err
 	}
 	llm := cfg.LLM
+	gate := s.hardening.MutationGate
 	s.mu.Unlock()
+	// Server mutation gate: agent is permanently read-only (no write tools).
+	if gate {
+		confirmWrites = false
+		llm.AllowWrites = false
+	}
 	// SSRF: AgentChat dialls the active profile's BaseURL and surfaces the LLM
 	// error text to the caller, so veto the host before running. Nil policy
 	// (desktop) allows everything.

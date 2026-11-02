@@ -28,6 +28,8 @@
   --db-postgres-bg: #336791;
   --db-redis: #fff;
   --db-redis-bg: #c0392b;
+  --db-mongo: #fff;
+  --db-mongo-bg: #13aa52;
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
     "Microsoft YaHei", sans-serif;
@@ -63,6 +65,8 @@
   --db-postgres-bg: #3d7eae;
   --db-redis: #1a0c0c;
   --db-redis-bg: #d94a4a;
+  --db-mongo: #0a1a10;
+  --db-mongo-bg: #13aa52;
   --row-alt: rgba(255, 255, 255, 0.03);
   --mono: "Cascadia Code", "JetBrains Mono", Consolas, monospace;
   --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
@@ -116,7 +120,7 @@ button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
 
 /* TablePlus-like light buttons — skip chrome/icon controls (send, twist, msg-action, …). */
 /* Skip segmented prefs (pill-seg .on) and sidebar/nav chrome — they own their own chrome. */
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye) {
+[data-theme='light'] button:not(.tree-twist):not(.tree-item):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye) {
   font-weight: 500;
   border-radius: 6px;
   min-height: 28px;
@@ -126,7 +130,7 @@ button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
   color: var(--text);
   box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset;
 }
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye):hover:not(:disabled) {
+[data-theme='light'] button:not(.tree-twist):not(.tree-item):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye):hover:not(:disabled) {
   background: #efefef;
   border-color: #bdbdbd;
 }
