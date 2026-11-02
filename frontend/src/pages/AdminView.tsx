@@ -1,226 +1,439 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
-import { adminCreateUser, adminListUsers, type AdminUser } from '../lib/api'
+import { BodyPortal } from '../lib/portal'
+import { useTipToast } from '../components/TipToast'
+import { useI18n } from '../i18n'
+import {
+  adminCreateUser,
+  adminListUsers,
+  adminSetPassword,
+  adminUpdateUser,
+  type AdminUser,
+} from '../lib/api'
 
-// Web-only admin console: lists accounts and mints new ones. It is rendered by
-// LoginView solely when the session role is "admin"; the desktop build never
-// reaches it (main.tsx mounts <App/> directly). All calls go over the same
-// admin-only HTTP endpoints, which the server also gates with RequireAdmin.
+// Web-only admin console: card list like LLM settings. Opened as App mode
+// "admin" from the bottom-left Settings menu (admin role only).
 
-const styles: Record<string, CSSProperties> = {
-  overlay: {
-    position: 'fixed',
-    inset: 0,
-    zIndex: 1100,
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: 'rgba(0,0,0,.5)',
-    padding: 16,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 520,
-    maxHeight: '85vh',
-    overflow: 'auto',
-    padding: 24,
-    borderRadius: 12,
-    background: '#1b2129',
-    boxShadow: '0 8px 30px rgba(0,0,0,.45)',
-    color: '#e6e6e6',
-    fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif',
-  },
-  head: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', margin: '0 0 4px' },
-  title: { margin: 0, fontSize: 18, fontWeight: 700 },
-  close: {
-    border: '1px solid #2c3540',
-    background: 'transparent',
-    color: '#9aa4b2',
-    borderRadius: 8,
-    padding: '4px 10px',
-    cursor: 'pointer',
-    fontSize: 13,
-  },
-  sub: { margin: '0 0 16px', fontSize: 13, color: '#9aa4b2' },
-  table: { width: '100%', borderCollapse: 'collapse', fontSize: 13, marginBottom: 20 },
-  th: { textAlign: 'left', color: '#9aa4b2', fontWeight: 600, padding: '6px 8px', borderBottom: '1px solid #2c3540' },
-  td: { padding: '6px 8px', borderBottom: '1px solid #222a34' },
-  badge: {
-    display: 'inline-block',
-    padding: '1px 8px',
-    borderRadius: 999,
-    fontSize: 11,
-    background: '#2c3540',
-    color: '#cbd5e1',
-  },
-  label: { display: 'block', fontSize: 12, color: '#9aa4b2', margin: '12px 0 4px' },
-  input: {
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '9px 10px',
-    borderRadius: 8,
-    border: '1px solid #2c3540',
-    background: '#12161c',
-    color: '#e6e6e6',
-    fontSize: 14,
-  },
-  row: { display: 'flex', gap: 10 },
-  button: {
-    marginTop: 18,
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: 'none',
-    background: '#3b82f6',
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  msg: { marginTop: 12, fontSize: 13 },
+type EditForm = {
+  id: string
+  username: string
+  displayName: string
+  role: string
 }
+
+type PasswordForm = {
+  id: string
+  username: string
+  password: string
+  confirm: string
+}
+
+type CreateForm = {
+  username: string
+  password: string
+  role: string
+}
+
+const emptyCreate = (): CreateForm => ({ username: '', password: '', role: 'user' })
 
 interface Props {
-  onClose: () => void
+  /** Current session username — used to disable self-ban in the UI. */
+  selfUsername: string
 }
 
-export function AdminView({ onClose }: Props) {
+export function AdminView({ selfUsername }: Props) {
+  const { t } = useI18n()
+  const { showTip, tipNode } = useTipToast()
   const [users, setUsers] = useState<AdminUser[]>([])
-  const [loading, setLoading] = useState(true)
-  const [error, setError] = useState('')
-  const [notice, setNotice] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
-  const [role, setRole] = useState('user')
+  const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
+  const [createForm, setCreateForm] = useState<CreateForm>(emptyCreate)
+  const [createErr, setCreateErr] = useState('')
+  const [editing, setEditing] = useState<EditForm | null>(null)
+  const [editErr, setEditErr] = useState('')
+  const [pwdForm, setPwdForm] = useState<PasswordForm | null>(null)
+  const [pwdErr, setPwdErr] = useState('')
+  const [banTarget, setBanTarget] = useState<AdminUser | null>(null)
 
   const reload = useCallback(async () => {
-    setLoading(true)
-    try {
-      setUsers(await adminListUsers())
-      setError('')
-    } catch (e: any) {
-      setError(String(e?.message || e))
-    } finally {
-      setLoading(false)
-    }
+    setUsers(await adminListUsers())
   }, [])
 
   useEffect(() => {
-    void reload()
-  }, [reload])
+    void reload().catch((e) => showTip(String(e?.message || e), 'err'))
+  }, [reload, showTip])
 
-  async function onCreate(e: FormEvent) {
-    e.preventDefault()
-    setNotice('')
-    setError('')
-    if (!username.trim() || !password) {
-      setError('用户名和密码不能为空')
+  function startNew() {
+    setCreateForm(emptyCreate())
+    setCreateErr('')
+    setCreating(true)
+  }
+
+  function startEdit(u: AdminUser) {
+    setEditing({
+      id: u.id,
+      username: u.username,
+      displayName: u.displayName || '',
+      role: u.role,
+    })
+    setEditErr('')
+  }
+
+  function startPassword(u: AdminUser) {
+    setPwdForm({ id: u.id, username: u.username, password: '', confirm: '' })
+    setPwdErr('')
+  }
+
+  async function saveCreate() {
+    setBusy(true)
+    setCreateErr('')
+    try {
+      const res = await adminCreateUser(
+        createForm.username.trim(),
+        createForm.password,
+        createForm.role
+      )
+      if (!res.ok) {
+        setCreateErr(res.error || t('admin.create.fail'))
+        return
+      }
+      setCreating(false)
+      await reload()
+      showTip(t('admin.create.ok', { name: res.username || createForm.username }))
+    } catch (e: any) {
+      setCreateErr(String(e?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function saveEdit() {
+    if (!editing) return
+    setBusy(true)
+    setEditErr('')
+    try {
+      const res = await adminUpdateUser(editing.id, {
+        displayName: editing.displayName.trim(),
+        role: editing.role,
+      })
+      if (!res.ok) {
+        setEditErr(res.error || t('admin.save.fail'))
+        return
+      }
+      setEditing(null)
+      await reload()
+      showTip(t('admin.saved'))
+    } catch (e: any) {
+      setEditErr(String(e?.message || e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  async function savePassword() {
+    if (!pwdForm) return
+    if (pwdForm.password.length < 6) {
+      setPwdErr(t('admin.password.short'))
       return
     }
-    setCreating(true)
+    if (pwdForm.password !== pwdForm.confirm) {
+      setPwdErr(t('admin.password.mismatch'))
+      return
+    }
+    setBusy(true)
+    setPwdErr('')
     try {
-      const res = await adminCreateUser(username.trim(), password, role)
-      if (res.ok) {
-        setNotice(`已创建用户 ${res.username}`)
-        setUsername('')
-        setPassword('')
-        setRole('user')
-        await reload()
-      } else {
-        setError(res.error || '创建失败')
+      const res = await adminSetPassword(pwdForm.id, pwdForm.password)
+      if (!res.ok) {
+        setPwdErr(res.error || t('admin.password.fail'))
+        return
       }
+      setPwdForm(null)
+      showTip(t('admin.password.ok'))
     } catch (e: any) {
-      setError(String(e?.message || e))
+      setPwdErr(String(e?.message || e))
     } finally {
-      setCreating(false)
+      setBusy(false)
+    }
+  }
+
+  async function confirmBanToggle() {
+    if (!banTarget) return
+    const nextBanned = !banTarget.banned
+    setBusy(true)
+    try {
+      const res = await adminUpdateUser(banTarget.id, { banned: nextBanned })
+      if (!res.ok) {
+        showTip(res.error || t('admin.ban.fail'), 'err')
+        return
+      }
+      setBanTarget(null)
+      await reload()
+      showTip(nextBanned ? t('admin.ban.ok') : t('admin.unban.ok'))
+    } catch (e: any) {
+      showTip(String(e?.message || e), 'err')
+    } finally {
+      setBusy(false)
     }
   }
 
   return (
-    <div style={styles.overlay} onClick={onClose}>
-      <div style={styles.card} onClick={(e) => e.stopPropagation()}>
-        <div style={styles.head}>
-          <h1 style={styles.title}>用户管理</h1>
-          <button type="button" style={styles.close} onClick={onClose}>
-            关闭
-          </button>
+    <div className="panel conn-panel">
+      <header className="panel-head panel-head-row">
+        <div>
+          <h2>{t('admin.title')}</h2>
+          <p>{t('admin.hint')}</p>
         </div>
-        <p style={styles.sub}>服务端账号目录（仅管理员）。首个管理员由服务端环境变量引导创建。</p>
+        <button type="button" className="primary" onClick={startNew}>
+          {t('admin.add')}
+        </button>
+      </header>
 
-        {loading ? (
-          <p style={styles.sub}>加载中…</p>
-        ) : (
-          <table style={styles.table}>
-            <thead>
-              <tr>
-                <th style={styles.th}>用户名</th>
-                <th style={styles.th}>角色</th>
-              </tr>
-            </thead>
-            <tbody>
-              {users.map((u) => (
-                <tr key={u.id}>
-                  <td style={styles.td}>{u.username}</td>
-                  <td style={styles.td}>
-                    <span style={styles.badge}>{u.role}</span>
-                  </td>
-                </tr>
-              ))}
-              {users.length === 0 && (
-                <tr>
-                  <td style={styles.td} colSpan={2}>
-                    暂无用户
-                  </td>
-                </tr>
-              )}
-            </tbody>
-          </table>
-        )}
-
-        <form onSubmit={onCreate}>
-          <h2 style={{ ...styles.title, fontSize: 15, margin: '0 0 4px' }}>新建用户</h2>
-          <label style={styles.label} htmlFor="nu">
-            用户名
-          </label>
-          <input
-            id="nu"
-            style={styles.input}
-            value={username}
-            autoComplete="off"
-            onChange={(e) => setUsername(e.target.value)}
-          />
-          <label style={styles.label} htmlFor="np">
-            密码
-          </label>
-          <input
-            id="np"
-            type="password"
-            style={styles.input}
-            value={password}
-            autoComplete="new-password"
-            onChange={(e) => setPassword(e.target.value)}
-          />
-          <label style={styles.label} htmlFor="nr">
-            角色
-          </label>
-          <select
-            id="nr"
-            style={styles.input}
-            value={role}
-            onChange={(e) => setRole(e.target.value)}
-          >
-            <option value="user">user</option>
-            <option value="admin">admin</option>
-          </select>
-          <button type="submit" style={styles.button} disabled={creating}>
-            {creating ? '创建中…' : '创建用户'}
-          </button>
-        </form>
-
-        {error && <div style={{ ...styles.msg, color: '#f87171' }}>{error}</div>}
-        {notice && <div style={{ ...styles.msg, color: '#4ade80' }}>{notice}</div>}
+      <div className="conn-list-cards">
+        {users.length === 0 && <div className="card muted">{t('admin.empty')}</div>}
+        {users.map((u) => {
+          const isSelf = u.username === selfUsername
+          const title = u.displayName?.trim() || u.username
+          return (
+            <div key={u.id} className="card conn-card">
+              <div className="conn-card-main">
+                <div className="conn-card-name">
+                  {title}
+                  <span className="tag">{u.role}</span>
+                  {u.banned && <span className="tag danger">{t('admin.tag.banned')}</span>}
+                  {isSelf && <span className="tag ok">{t('admin.tag.self')}</span>}
+                </div>
+                <div className="conn-card-addr mono">
+                  @{u.username}
+                  {u.displayName?.trim() ? ` · ${u.displayName}` : ''}
+                </div>
+              </div>
+              <div className="conn-card-actions">
+                <button type="button" className="sm" disabled={busy} onClick={() => startEdit(u)}>
+                  {t('admin.edit')}
+                </button>
+                <button type="button" className="sm" disabled={busy} onClick={() => startPassword(u)}>
+                  {t('admin.password')}
+                </button>
+                <button
+                  type="button"
+                  className={`sm${u.banned ? '' : ' danger'}`}
+                  disabled={busy || isSelf}
+                  title={isSelf ? t('admin.ban.self') : undefined}
+                  onClick={() => setBanTarget(u)}
+                >
+                  {u.banned ? t('admin.unban') : t('admin.ban')}
+                </button>
+              </div>
+            </div>
+          )
+        })}
       </div>
+
+      {tipNode}
+
+      {creating && (
+        <BodyPortal>
+          <div className="modal-backdrop" onClick={() => !busy && setCreating(false)}>
+            <div className="modal card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+              <div className="modal-head">
+                <h2>{t('admin.createTitle')}</h2>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={busy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setCreating(false)}
+                >
+                  ×
+                </button>
+              </div>
+              <label>
+                {t('admin.username')}
+                <input
+                  value={createForm.username}
+                  autoComplete="off"
+                  onChange={(e) => setCreateForm({ ...createForm, username: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.passwordNew')}
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={createForm.password}
+                  onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.role')}
+                <select
+                  value={createForm.role}
+                  onChange={(e) => setCreateForm({ ...createForm, role: e.target.value })}
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </label>
+              {createErr && <div className="error-text">{createErr}</div>}
+              <div className="modal-actions">
+                <button type="button" disabled={busy} onClick={() => setCreating(false)}>
+                  {t('admin.cancel')}
+                </button>
+                <button type="button" className="primary" disabled={busy} onClick={() => void saveCreate()}>
+                  {busy ? t('admin.saving') : t('admin.create')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      )}
+
+      {editing && (
+        <BodyPortal>
+          <div className="modal-backdrop" onClick={() => !busy && setEditing(null)}>
+            <div className="modal card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+              <div className="modal-head">
+                <h2>{t('admin.editTitle')}</h2>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={busy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setEditing(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <label>
+                {t('admin.username')}
+                <input type="text" value={editing.username} disabled readOnly />
+              </label>
+              <label>
+                {t('admin.displayName')}
+                <input
+                  value={editing.displayName}
+                  maxLength={64}
+                  placeholder={t('admin.displayName.ph')}
+                  onChange={(e) => setEditing({ ...editing, displayName: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.role')}
+                <select
+                  value={editing.role}
+                  onChange={(e) => setEditing({ ...editing, role: e.target.value })}
+                >
+                  <option value="user">user</option>
+                  <option value="admin">admin</option>
+                </select>
+              </label>
+              {editErr && <div className="error-text">{editErr}</div>}
+              <div className="modal-actions">
+                <button type="button" disabled={busy} onClick={() => setEditing(null)}>
+                  {t('admin.cancel')}
+                </button>
+                <button type="button" className="primary" disabled={busy} onClick={() => void saveEdit()}>
+                  {busy ? t('admin.saving') : t('admin.save')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      )}
+
+      {pwdForm && (
+        <BodyPortal>
+          <div className="modal-backdrop" onClick={() => !busy && setPwdForm(null)}>
+            <div className="modal card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 440 }}>
+              <div className="modal-head">
+                <h2>{t('admin.passwordTitle')}</h2>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={busy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setPwdForm(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <p className="muted" style={{ margin: '0 0 8px', fontSize: 13 }}>
+                {t('admin.passwordHint', { name: pwdForm.username })}
+              </p>
+              <label>
+                {t('admin.passwordNew')}
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwdForm.password}
+                  onChange={(e) => setPwdForm({ ...pwdForm, password: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.passwordConfirm')}
+                <input
+                  type="password"
+                  autoComplete="new-password"
+                  value={pwdForm.confirm}
+                  onChange={(e) => setPwdForm({ ...pwdForm, confirm: e.target.value })}
+                />
+              </label>
+              {pwdErr && <div className="error-text">{pwdErr}</div>}
+              <div className="modal-actions">
+                <button type="button" disabled={busy} onClick={() => setPwdForm(null)}>
+                  {t('admin.cancel')}
+                </button>
+                <button type="button" className="primary" disabled={busy} onClick={() => void savePassword()}>
+                  {busy ? t('admin.saving') : t('admin.passwordSave')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      )}
+
+      {banTarget && (
+        <BodyPortal>
+          <div className="modal-backdrop" onClick={() => !busy && setBanTarget(null)}>
+            <div className="modal card" onClick={(e) => e.stopPropagation()} style={{ maxWidth: 400 }}>
+              <div className="modal-head">
+                <h3>{banTarget.banned ? t('admin.unbanTitle') : t('admin.banTitle')}</h3>
+                <button
+                  type="button"
+                  className="modal-close"
+                  disabled={busy}
+                  title={t('modal.close')}
+                  aria-label={t('modal.close')}
+                  onClick={() => setBanTarget(null)}
+                >
+                  ×
+                </button>
+              </div>
+              <p style={{ margin: '0 0 16px', fontSize: 13, lineHeight: 1.55, color: 'var(--text-2)' }}>
+                {banTarget.banned
+                  ? t('admin.unbanConfirm', { name: banTarget.username })
+                  : t('admin.banConfirm', { name: banTarget.username })}
+              </p>
+              <div className="modal-actions">
+                <button type="button" className="sm" disabled={busy} onClick={() => setBanTarget(null)}>
+                  {t('admin.cancel')}
+                </button>
+                <button
+                  type="button"
+                  className={`sm${banTarget.banned ? ' primary' : ' danger'}`}
+                  disabled={busy}
+                  onClick={() => void confirmBanToggle()}
+                >
+                  {banTarget.banned ? t('admin.unban') : t('admin.ban')}
+                </button>
+              </div>
+            </div>
+          </div>
+        </BodyPortal>
+      )}
     </div>
   )
 }

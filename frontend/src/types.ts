@@ -1,5 +1,15 @@
 export type ConnType = 'mysql' | 'postgres' | 'redis' | 'mongo'
-export type AppMode = 'work' | 'query' | 'prefs' | 'connections' | 'settings'
+export type AppMode = 'work' | 'query' | 'prefs' | 'connections' | 'settings' | 'profile' | 'admin'
+
+/** Web-only account chrome passed from LoginView into App. */
+export interface AccountSession {
+  username: string
+  role: string
+  displayName: string
+  avatar: string
+  onLogout: () => void
+  onProfileUpdated: (next: { displayName: string; avatar: string }) => void
+}
 
 export interface Connection {
   id: string

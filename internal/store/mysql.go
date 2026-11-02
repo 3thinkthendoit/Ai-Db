@@ -10,6 +10,8 @@ import (
 	"time"
 
 	"AI-DB/internal/config"
+
+	"github.com/go-sql-driver/mysql"
 )
 
 // schemaSQL is the server DDL, applied idempotently by Migrate on startup.
@@ -41,14 +43,47 @@ func (s *MySQLStore) DB() *sql.DB { return s.db }
 
 // Migrate applies schema.sql (CREATE TABLE IF NOT EXISTS …) so a fresh server
 // bootstraps its own tables. Statements are split on ";" after dropping
-// full-line "--" comments.
+// full-line "--" comments. Then additive ALTERs backfill columns on older DBs
+// that already have users without display_name/avatar.
 func (s *MySQLStore) Migrate(ctx context.Context) error {
 	for _, stmt := range splitStatements(schemaSQL) {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
 			return fmt.Errorf("migrate: %w", err)
 		}
 	}
+	if err := s.ensureUserProfileColumns(ctx); err != nil {
+		return err
+	}
 	return nil
+}
+
+// ensureUserProfileColumns adds display_name / avatar when missing (idempotent).
+// CREATE TABLE IF NOT EXISTS does not alter existing tables, so upgrades need this.
+func (s *MySQLStore) ensureUserProfileColumns(ctx context.Context) error {
+	alters := []string{
+		"ALTER TABLE users ADD COLUMN display_name VARCHAR(64) NOT NULL DEFAULT ''",
+		"ALTER TABLE users ADD COLUMN avatar MEDIUMTEXT NULL",
+		"ALTER TABLE users ADD COLUMN banned TINYINT(1) NOT NULL DEFAULT 0",
+		"ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0",
+	}
+	for _, stmt := range alters {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			if isDuplicateColumn(err) {
+				continue
+			}
+			return fmt.Errorf("migrate profile columns: %w", err)
+		}
+	}
+	return nil
+}
+
+func isDuplicateColumn(err error) bool {
+	var me *mysql.MySQLError
+	if errors.As(err, &me) {
+		return me.Number == 1060 // ER_DUP_FIELDNAME
+	}
+	// Fallback for drivers that wrap the error string only.
+	return strings.Contains(err.Error(), "Duplicate column name")
 }
 
 // Load assembles the user's config document from the owner-scoped rows across

@@ -14,6 +14,14 @@ export function Connect(arg1) {
   return window['go']['main']['App']['Connect'](arg1);
 }
 
+export function CreateDatabase(arg1, arg2) {
+  return window['go']['main']['App']['CreateDatabase'](arg1, arg2);
+}
+
+export function CreateDatabaseOptions(arg1) {
+  return window['go']['main']['App']['CreateDatabaseOptions'](arg1);
+}
+
 export function DeleteConnection(arg1) {
   return window['go']['main']['App']['DeleteConnection'](arg1);
 }

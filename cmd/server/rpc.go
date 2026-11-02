@@ -12,6 +12,7 @@ import (
 	"AI-DB/internal/app"
 	"AI-DB/internal/auth"
 	"AI-DB/internal/config"
+	"AI-DB/internal/db"
 )
 
 // This file maps every internal/app.Service method to a POST /api/{Method}
@@ -40,7 +41,7 @@ type badRequestError struct{ err error }
 func (e *badRequestError) Error() string { return e.err.Error() }
 func (e *badRequestError) Unwrap() error { return e.err }
 
-// maxRPCBodyBytes caps a single RPC request body. All 21 endpoints share
+// maxRPCBodyBytes caps a single RPC request body. All 23 endpoints share
 // decodeArgs, so this one limit protects the whole authenticated surface: without
 // it a tenant could POST a multi-GB {args:[...]} envelope and exhaust the heap of
 // the shared server process, taking down every other tenant. 4 MiB is ample for
@@ -80,7 +81,7 @@ func argJSON[T any](args []json.RawMessage, i int) (T, error) {
 // handleRPC wraps an rpcFunc with the session gate, principal injection, arg
 // envelope decoding and the standard error contract.
 func (s *server) handleRPC(method string, fn rpcFunc) http.Handler {
-	return s.sessions.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	return s.gate(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := auth.PrincipalFromContext(r.Context())
 		if !ok {
 			writeJSON(w, http.StatusUnauthorized, map[string]string{"error": "unauthorized"})
@@ -165,7 +166,7 @@ type llmTestResult struct {
 	DurationMs int64  `json:"durationMs"`
 }
 
-// registerAPIRoutes maps all 21 bound service methods to HTTP endpoints. The
+// registerAPIRoutes maps all 23 bound service methods to HTTP endpoints. The
 // order and signatures mirror frontend/wailsjs/go/main/App.d.ts. Every handler
 // runs behind the session middleware and re-verifies connection ownership inside
 // the service layer (findConnLocked), so a tenant can only ever reach their own
@@ -260,6 +261,24 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 			return nil, err
 		}
 		return res, nil
+	})
+	s.route(mux, "CreateDatabaseOptions", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		connID, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return s.svc.CreateDatabaseOptions(ctx, p, connID)
+	})
+	s.route(mux, "CreateDatabase", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		connID, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		spec, err := argJSON[db.CreateDatabaseSpec](args, 1)
+		if err != nil {
+			return nil, err
+		}
+		return s.svc.CreateDatabase(ctx, p, connID, spec)
 	})
 	s.route(mux, "SetActiveSchema", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
 		connID, err := argString(args, 0)

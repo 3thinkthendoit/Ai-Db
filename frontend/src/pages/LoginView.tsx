@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useState } from 'react'
-import type { CSSProperties, FormEvent } from 'react'
-import { login, logout, session, type LoginResult, type SessionInfo } from '../lib/api'
+import type { FormEvent } from 'react'
+import { getProfile, login, logout, session, type LoginResult, type SessionInfo } from '../lib/api'
+import { useI18n } from '../i18n'
+import logoSrc from '../assets/logo.svg'
 import App from '../App'
-import { AdminView } from './AdminView'
 
 // Web entry: gates on the HTTP auth session, then mounts the full <App/> once
 // every bound method has an endpoint (Phase 3). The desktop build never renders
@@ -10,105 +11,112 @@ import { AdminView } from './AdminView'
 
 type Phase = 'checking' | 'login' | 'done'
 
-const styles: Record<string, CSSProperties> = {
-  wrap: {
-    minHeight: '100vh',
-    display: 'flex',
-    alignItems: 'center',
-    justifyContent: 'center',
-    background: '#12161c',
-    color: '#e6e6e6',
-    fontFamily: 'system-ui, -apple-system, Segoe UI, sans-serif',
-    padding: 16,
-  },
-  card: {
-    width: '100%',
-    maxWidth: 420,
-    padding: 24,
-    borderRadius: 12,
-    background: '#1b2129',
-    boxShadow: '0 8px 30px rgba(0,0,0,.45)',
-  },
-  title: { margin: '0 0 4px', fontSize: 20, fontWeight: 700 },
-  sub: { margin: '0 0 20px', fontSize: 13, color: '#9aa4b2' },
-  label: { display: 'block', fontSize: 12, color: '#9aa4b2', margin: '12px 0 4px' },
-  input: {
-    width: '100%',
-    boxSizing: 'border-box',
-    padding: '9px 10px',
-    borderRadius: 8,
-    border: '1px solid #2c3540',
-    background: '#12161c',
-    color: '#e6e6e6',
-    fontSize: 14,
-  },
-  button: {
-    marginTop: 18,
-    width: '100%',
-    padding: '10px 12px',
-    borderRadius: 8,
-    border: 'none',
-    background: '#3b82f6',
-    color: 'white',
-    fontSize: 14,
-    fontWeight: 600,
-    cursor: 'pointer',
-  },
-  ghost: {
-    marginTop: 10,
-    width: '100%',
-    padding: '9px 12px',
-    borderRadius: 8,
-    border: '1px solid #2c3540',
-    background: 'transparent',
-    color: '#9aa4b2',
-    fontSize: 13,
-    cursor: 'pointer',
-  },
-  error: { marginTop: 12, fontSize: 13, color: '#f87171' },
-  hint: { marginTop: 16, fontSize: 12, color: '#6b7280', lineHeight: 1.6 },
-  fabRow: {
-    position: 'fixed',
-    top: 10,
-    right: 12,
-    zIndex: 1000,
-    display: 'flex',
-    gap: 8,
-  },
-  fabBtn: {
-    padding: '6px 12px',
-    borderRadius: 8,
-    border: '1px solid #2c3540',
-    background: 'rgba(27,33,41,.92)',
-    color: '#9aa4b2',
-    fontSize: 12,
-    cursor: 'pointer',
-  },
+function IconUser() {
+  return (
+    <svg className="login-field-icon" viewBox="0 0 24 24" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M20 21a8 8 0 0 0-16 0M12 13a4 4 0 1 0 0-8 4 4 0 0 0 0 8z"
+      />
+    </svg>
+  )
+}
+
+function IconLock() {
+  return (
+    <svg className="login-field-icon" viewBox="0 0 24 24" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M7 11V8a5 5 0 0 1 10 0v3M6 11h12v10H6z"
+      />
+    </svg>
+  )
+}
+
+function IconEye({ off }: { off?: boolean }) {
+  if (off) {
+    return (
+      <svg viewBox="0 0 24 24" aria-hidden>
+        <path
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="1.7"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          d="M3 3l18 18M10.6 10.6a2 2 0 0 0 2.8 2.8M9.9 5.1A10.5 10.5 0 0 1 12 5c5 0 9.3 3.1 11 7-.5 1.2-1.2 2.3-2.1 3.2M6.1 6.1C4.2 7.4 2.7 9.1 2 12c1.7 3.9 6 7 11 7 1.4 0 2.7-.2 3.9-.7"
+        />
+      </svg>
+    )
+  }
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"
+      />
+      <circle cx="12" cy="12" r="3" fill="none" stroke="currentColor" strokeWidth="1.7" />
+    </svg>
+  )
+}
+
+function IconShield() {
+  return (
+    <svg viewBox="0 0 24 24" aria-hidden>
+      <path
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.7"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+        d="M12 3l8 3v6c0 5-3.4 7.8-8 9-4.6-1.2-8-4-8-9V6l8-3z"
+      />
+    </svg>
+  )
 }
 
 export function LoginView() {
+  const { t } = useI18n()
   const [phase, setPhase] = useState<Phase>('checking')
   const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
+  const [showPwd, setShowPwd] = useState(false)
   const [error, setError] = useState('')
   const [who, setWho] = useState('')
   const [role, setRole] = useState('')
-  const [showAdmin, setShowAdmin] = useState(false)
+  const [displayName, setDisplayName] = useState('')
+  const [avatar, setAvatar] = useState('')
 
-  const enter = useCallback((name: string, userRole: string) => {
+  const enter = useCallback(async (name: string, userRole: string) => {
     setWho(name)
     setRole(userRole)
     setPhase('done')
+    const p = await getProfile().catch(() => null)
+    if (p) {
+      setDisplayName(p.displayName || '')
+      setAvatar(p.avatar || '')
+      if (p.role) setRole(p.role)
+    }
   }, [])
 
-  // On load, resume an existing session if the cookie is still valid.
   useEffect(() => {
     let alive = true
     void (async () => {
       const s = await session().catch((): SessionInfo => ({ authenticated: false }))
       if (!alive) return
       if (s.authenticated) {
-        enter(s.username || '', s.role || '')
+        await enter(s.username || '', s.role || '')
       } else {
         setPhase('login')
       }
@@ -121,11 +129,14 @@ export function LoginView() {
   async function onSubmit(e: FormEvent) {
     e.preventDefault()
     setError('')
-    const res = await login(username, password).catch((): LoginResult => ({ ok: false, error: '网络错误' }))
+    const res = await login(username, password).catch((): LoginResult => ({
+      ok: false,
+      error: t('login.networkError'),
+    }))
     if (res.ok) {
-      enter(res.username || username, res.role || '')
+      await enter(res.username || username, res.role || '')
     } else {
-      setError(res.error || '登录失败')
+      setError(res.error || t('login.failed'))
     }
   }
 
@@ -133,83 +144,130 @@ export function LoginView() {
     await logout().catch(() => undefined)
     setWho('')
     setRole('')
-    setShowAdmin(false)
+    setDisplayName('')
+    setAvatar('')
     setUsername('')
     setPassword('')
     setError('')
     setPhase('login')
   }
 
-  // Authenticated: mount the full app (all 21 methods go over HTTP) with a
-  // floating logout control. The desktop build reaches <App/> via main.tsx.
   if (phase === 'done') {
     return (
-      <>
-        <App />
-        <div style={styles.fabRow}>
-          {role === 'admin' && (
-            <button type="button" style={styles.fabBtn} onClick={() => setShowAdmin(true)}>
-              用户管理
-            </button>
-          )}
-          <button type="button" style={styles.fabBtn} onClick={onLogout}>
-            退出登录{who ? `（${who}）` : ''}
-          </button>
-        </div>
-        {showAdmin && role === 'admin' && <AdminView onClose={() => setShowAdmin(false)} />}
-      </>
+      <App
+        account={{
+          username: who,
+          role,
+          displayName,
+          avatar,
+          onLogout: () => void onLogout(),
+          onProfileUpdated: (next) => {
+            setDisplayName(next.displayName)
+            setAvatar(next.avatar)
+          },
+        }}
+      />
     )
   }
 
   return (
-    <div style={styles.wrap}>
-      <div style={styles.card}>
-        {phase === 'checking' && (
-          <>
-            <h1 style={styles.title}>AI-DB</h1>
-            <p style={styles.sub}>正在检查会话…</p>
-          </>
-        )}
+    <div className="login-page">
+      <aside className="login-brand">
+        <div className="login-logo">
+          <img src={logoSrc} alt="" />
+          <span>AI-DB</span>
+        </div>
 
-        {phase === 'login' && (
-          <form onSubmit={onSubmit}>
-            <h1 style={styles.title}>登录 AI-DB</h1>
-            <p style={styles.sub}>服务端版 · 账号密码登录</p>
-            <label style={styles.label} htmlFor="u">
-              用户名
-            </label>
-            <input
-              id="u"
-              style={styles.input}
-              value={username}
-              autoComplete="username"
-              onChange={(e) => setUsername(e.target.value)}
-            />
-            <label style={styles.label} htmlFor="p">
-              密码
-            </label>
-            <input
-              id="p"
-              type="password"
-              style={styles.input}
-              value={password}
-              autoComplete="current-password"
-              onChange={(e) => setPassword(e.target.value)}
-            />
-            <button type="submit" style={styles.button}>
-              登录
-            </button>
-            {error && <div style={styles.error}>{error}</div>}
-            {import.meta.env.DEV && (
-              <div style={styles.hint}>
-                开发提示：服务端设 AIDB_SEED_DEMO=true 会种子演示账号 alice / bob，
-                <br />
-                口令取自 AIDB_SEED_*_PWD 环境变量或服务端启动日志。
+        <div className="login-brand-body">
+          <span className="login-badge">{t('login.badge')}</span>
+          <h1 className="login-headline">{t('login.headline')}</h1>
+          <p className="login-desc">{t('login.desc')}</p>
+
+          <div className="login-flow">
+            <div className="login-flow-card">{t('login.flow.connect')}</div>
+            <span className="login-flow-arrow" aria-hidden>
+              →
+            </span>
+            <div className="login-flow-card">{t('login.flow.agent')}</div>
+            <span className="login-flow-arrow" aria-hidden>
+              →
+            </span>
+            <div className="login-flow-card">{t('login.flow.workbench')}</div>
+          </div>
+        </div>
+
+        <div className="login-brand-foot">
+          <IconShield />
+          <span>{t('login.brand.foot')}</span>
+        </div>
+      </aside>
+
+      <main className="login-panel">
+        <div className="login-panel-inner">
+          {phase === 'checking' && (
+            <div className="login-checking">
+              <h2>AI-DB</h2>
+              <p>{t('login.checking')}</p>
+            </div>
+          )}
+
+          {phase === 'login' && (
+            <form className="login-form" onSubmit={onSubmit}>
+              <p className="login-welcome">{t('login.welcome')}</p>
+              <h2 className="login-form-title">{t('login.title')}</h2>
+
+              <label className="login-label" htmlFor="u">
+                <span className="login-req">*</span>
+                {t('login.username')}
+              </label>
+              <div className="login-field">
+                <IconUser />
+                <input
+                  id="u"
+                  value={username}
+                  autoComplete="username"
+                  placeholder={t('login.username.ph')}
+                  onChange={(e) => setUsername(e.target.value)}
+                />
               </div>
-            )}
-          </form>
-        )}
-      </div>
+
+              <label className="login-label" htmlFor="p">
+                <span className="login-req">*</span>
+                {t('login.password')}
+              </label>
+              <div className="login-field">
+                <IconLock />
+                <input
+                  id="p"
+                  type={showPwd ? 'text' : 'password'}
+                  value={password}
+                  autoComplete="current-password"
+                  placeholder={t('login.password.ph')}
+                  onChange={(e) => setPassword(e.target.value)}
+                />
+                <button
+                  type="button"
+                  className="login-eye ghost"
+                  aria-label={showPwd ? t('login.hidePassword') : t('login.showPassword')}
+                  onClick={() => setShowPwd((v) => !v)}
+                >
+                  <IconEye off={showPwd} />
+                </button>
+              </div>
+
+              <button type="submit" className="login-submit primary">
+                {t('login.submit')}
+              </button>
+
+              {error && <div className="login-error">{error}</div>}
+
+              {import.meta.env.DEV && <div className="login-dev-hint">{t('login.devHint')}</div>}
+            </form>
+          )}
+        </div>
+
+        <div className="login-panel-foot">{t('login.foot')}</div>
+      </main>
     </div>
   )
 }

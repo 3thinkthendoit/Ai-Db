@@ -174,17 +174,23 @@ func run(ctx context.Context) error {
 	mux.HandleFunc("POST /api/login", s.handleLogin)
 	mux.HandleFunc("POST /api/logout", s.handleLogout)
 	mux.HandleFunc("GET /api/session", s.handleSession)
-	// Authenticated RPC endpoints: all 21 bound service methods (see rpc.go),
+	// Authenticated RPC endpoints: all 23 bound service methods (see rpc.go),
 	// each mirroring its desktop Wails binding's signature and error semantics.
 	s.registerAPIRoutes(mux)
 	// Streaming agent endpoint (server-only, NOT a Wails binding): the SSE sibling
 	// of POST /api/AgentChat that pushes each agent step live. Kept out of
-	// registerAPIRoutes so the bound 21-method surface (and frontend/wailsjs) is
+	// registerAPIRoutes so the bound 23-method surface (and frontend/wailsjs) is
 	// untouched.
-	mux.Handle("POST /api/AgentChatStream", s.sessions.Middleware(http.HandlerFunc(s.handleAgentChatStream)))
-	// Admin-only account management (RequireAdmin runs inside the session gate).
-	mux.Handle("POST /api/admin/users", s.sessions.Middleware(auth.RequireAdmin(http.HandlerFunc(s.handleAdminCreateUser))))
-	mux.Handle("GET /api/admin/users", s.sessions.Middleware(auth.RequireAdmin(http.HandlerFunc(s.handleAdminListUsers))))
+	mux.Handle("POST /api/AgentChatStream", s.gate(http.HandlerFunc(s.handleAgentChatStream)))
+	// Self-service profile (any authenticated user).
+	mux.Handle("GET /api/me", s.gate(http.HandlerFunc(s.handleGetMe)))
+	mux.Handle("PUT /api/me", s.gate(http.HandlerFunc(s.handleUpdateMe)))
+	mux.Handle("POST /api/me/password", s.gate(http.HandlerFunc(s.handleChangePassword)))
+	// Admin-only account management (RequireAdmin runs inside the live account gate).
+	mux.Handle("POST /api/admin/users", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminCreateUser))))
+	mux.Handle("GET /api/admin/users", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminListUsers))))
+	mux.Handle("PATCH /api/admin/users/{id}", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminUpdateUser))))
+	mux.Handle("POST /api/admin/users/{id}/password", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminSetPassword))))
 
 	// Same-origin static hosting of the built web UI (frontend/dist, embedded via
 	// the AI-DB/frontend package). Registered as the least-specific "GET /" so
@@ -281,7 +287,12 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusUnauthorized, map[string]any{"ok": false, "error": "用户名或密码错误"})
 		return
 	}
-	value, err := s.sessions.Issue(u.ID, u.Username, u.Role)
+	if u.Banned {
+		s.audit.loginFailure(r, body.Username)
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "账号已被封禁"})
+		return
+	}
+	value, err := s.sessions.Issue(u.ID, u.Username, u.Role, u.TokenVersion)
 	if err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "session error"})
 		return
@@ -318,7 +329,19 @@ func (s *server) handleSession(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
 		return
 	}
-	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": sess.Username, "role": sess.Role})
+	u, err := s.users.ByIDAuth(r.Context(), sess.UserID)
+	if err != nil || u.Banned || sess.TokenVersion != u.TokenVersion {
+		// Drop a stale cookie when the account vanished, was banned, or password changed.
+		http.SetCookie(w, s.sessions.ClearCookie())
+		writeJSON(w, http.StatusOK, map[string]any{"authenticated": false})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"authenticated": true, "username": u.Username, "role": u.Role})
+}
+
+// gate authenticates via cookie then reloads live ban/role/token_version.
+func (s *server) gate(next http.Handler) http.Handler {
+	return s.sessions.Gate(s.users, next)
 }
 
 // handleAdminCreateUser mints a new account (admin-only, the sole creation path
@@ -343,6 +366,10 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	body.Username = strings.TrimSpace(body.Username)
 	if body.Username == "" || body.Password == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "username and password are required"})
+		return
+	}
+	if msg := validatePassword(body.Password); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
 		return
 	}
 	role := body.Role
@@ -395,13 +422,18 @@ func (s *server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	type userView struct {
-		ID       string `json:"id"`
-		Username string `json:"username"`
-		Role     string `json:"role"`
+		ID          string `json:"id"`
+		Username    string `json:"username"`
+		Role        string `json:"role"`
+		DisplayName string `json:"displayName"`
+		Banned      bool   `json:"banned"`
 	}
 	out := make([]userView, 0, len(all))
 	for _, u := range all {
-		out = append(out, userView{ID: u.ID, Username: u.Username, Role: u.Role})
+		out = append(out, userView{
+			ID: u.ID, Username: u.Username, Role: u.Role,
+			DisplayName: u.DisplayName, Banned: u.Banned,
+		})
 	}
 	s.audit.adminListUsers(r, actor, len(all), "success")
 	writeJSON(w, http.StatusOK, out)

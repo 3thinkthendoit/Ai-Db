@@ -14,14 +14,15 @@ import (
 // CookieName is the session cookie key.
 const CookieName = "aidb_session"
 
-// Session is the authenticated identity carried by the cookie. Phase 0 uses a
-// stateless HMAC-signed cookie (no sessions table); Phase 2 can add server-side
-// sessions for revocation without changing this shape.
+// Session is the authenticated identity carried by the cookie. Stateless
+// HMAC-signed cookies; TokenVersion must match users.token_version so password
+// changes revoke older cookies without a sessions table.
 type Session struct {
-	UserID    string    `json:"uid"`
-	Username  string    `json:"user"`
-	Role      string    `json:"role"`
-	ExpiresAt time.Time `json:"exp"`
+	UserID       string    `json:"uid"`
+	Username     string    `json:"user"`
+	Role         string    `json:"role"`
+	TokenVersion int       `json:"ver"`
+	ExpiresAt    time.Time `json:"exp"`
 }
 
 // SessionManager issues and verifies signed session cookies.
@@ -40,12 +41,13 @@ func NewSessionManager(secret []byte, ttl time.Duration, secure bool) *SessionMa
 func (m *SessionManager) TTL() time.Duration { return m.ttl }
 
 // Issue signs a fresh session for the user and returns the cookie value.
-func (m *SessionManager) Issue(userID, username, role string) (string, error) {
+func (m *SessionManager) Issue(userID, username, role string, tokenVersion int) (string, error) {
 	s := Session{
-		UserID:    userID,
-		Username:  username,
-		Role:      role,
-		ExpiresAt: time.Now().Add(m.ttl).UTC(),
+		UserID:       userID,
+		Username:     username,
+		Role:         role,
+		TokenVersion: tokenVersion,
+		ExpiresAt:    time.Now().Add(m.ttl).UTC(),
 	}
 	payload, err := json.Marshal(s)
 	if err != nil {
@@ -75,7 +77,7 @@ func (m *SessionManager) Verify(value string) (*Session, error) {
 	}
 	var s Session
 	if err := json.Unmarshal(raw, &s); err != nil {
-		return nil, err
+		return nil, errors.New("malformed session payload")
 	}
 	if time.Now().UTC().After(s.ExpiresAt) {
 		return nil, errors.New("session expired")

@@ -1,0 +1,48 @@
+# Local/dev stack for the AI-DB server (multi-user HTTP mode).
+#   docker compose up -d --build   ->  http://localhost:8080
+# The React UI is embedded in the app image, so only the data volume matters.
+# Defaults below are dev-only: override AIDB_ADMIN_PASSWORD (and never expose
+# MySQL) before pointing this at anything real.
+
+services:
+  mysql:
+    image: mysql:8.0
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_unicode_ci
+      - --default-authentication-plugin=mysql_native_password
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: aidb
+    volumes:
+      - aidb-mysql:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 30
+
+  app:
+    build: .
+    image: ai-db:local
+    ports:
+      - "8080:8080"
+    environment:
+      AIDB_MYSQL_DSN: root:root@tcp(mysql:3306)/aidb?parseTime=true&charset=utf8mb4
+      AIDB_ADDR: :8080
+      AIDB_DATA_DIR: /app/data
+      # Set true only behind HTTPS, otherwise the Secure cookie is useless.
+      AIDB_COOKIE_SECURE: ${AIDB_COOKIE_SECURE:-false}
+      AIDB_ADMIN_USERNAME: ${AIDB_ADMIN_USERNAME:-admin}
+      AIDB_ADMIN_PASSWORD: ${AIDB_ADMIN_PASSWORD:-admin123}
+    volumes:
+      # MUST persist: master.key decrypts stored DB passwords, session.secret
+      # signs login cookies. Losing this locks every tenant out of their secrets.
+      - aidb-data:/app/data
+    depends_on:
+      mysql:
+        condition: service_healthy
+
+volumes:
+  aidb-mysql:
+  aidb-data:

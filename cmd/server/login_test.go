@@ -31,8 +31,98 @@ func (s *stubUsers) ByUsername(_ context.Context, username string) (*auth.User, 
 	return nil, auth.ErrNoUser
 }
 
-func (s *stubUsers) Create(context.Context, auth.User) error { return nil }
-func (s *stubUsers) Count(context.Context) (int, error)      { return len(s.byName), nil }
+func (s *stubUsers) ByID(_ context.Context, id string) (*auth.User, error) {
+	if s.err != nil {
+		return nil, s.err
+	}
+	for _, u := range s.byName {
+		if u.ID == id {
+			cp := u
+			return &cp, nil
+		}
+	}
+	return nil, auth.ErrNoUser
+}
+
+func (s *stubUsers) ByIDAuth(ctx context.Context, id string) (*auth.AuthAccount, error) {
+	u, err := s.ByID(ctx, id)
+	if err != nil {
+		return nil, err
+	}
+	return &auth.AuthAccount{
+		ID: u.ID, Username: u.Username, Role: u.Role,
+		Banned: u.Banned, TokenVersion: u.TokenVersion,
+	}, nil
+}
+
+func (s *stubUsers) Create(_ context.Context, u auth.User) error {
+	if s.byName == nil {
+		s.byName = map[string]auth.User{}
+	}
+	s.byName[u.Username] = u
+	return nil
+}
+
+func (s *stubUsers) UpdateProfile(_ context.Context, id, displayName, avatar string) error {
+	for name, u := range s.byName {
+		if u.ID == id {
+			u.DisplayName = displayName
+			u.Avatar = avatar
+			s.byName[name] = u
+			return nil
+		}
+	}
+	return auth.ErrNoUser
+}
+
+func (s *stubUsers) UpdatePassword(_ context.Context, id, passwordHash string) (int, error) {
+	for name, u := range s.byName {
+		if u.ID == id {
+			u.PasswordHash = passwordHash
+			u.TokenVersion++
+			s.byName[name] = u
+			return u.TokenVersion, nil
+		}
+	}
+	return 0, auth.ErrNoUser
+}
+
+func (s *stubUsers) UpdateAdmin(_ context.Context, id, role, displayName string, banned bool) error {
+	for name, u := range s.byName {
+		if u.ID == id {
+			losingAdmin := u.Role == auth.RoleAdmin && !u.Banned && (role != auth.RoleAdmin || banned)
+			if losingAdmin {
+				n := 0
+				for _, o := range s.byName {
+					if o.Role == auth.RoleAdmin && !o.Banned {
+						n++
+					}
+				}
+				if n <= 1 {
+					return auth.ErrLastAdmin
+				}
+			}
+			u.Role = role
+			u.DisplayName = displayName
+			u.Banned = banned
+			s.byName[name] = u
+			return nil
+		}
+	}
+	return auth.ErrNoUser
+}
+
+func (s *stubUsers) CountAdmins(context.Context) (int, error) {
+	n := 0
+	for _, u := range s.byName {
+		if u.Role == auth.RoleAdmin && !u.Banned {
+			n++
+		}
+	}
+	return n, nil
+}
+
+func (s *stubUsers) Count(context.Context) (int, error) { return len(s.byName), nil }
 func (s *stubUsers) List(context.Context) ([]auth.User, error) {
 	out := make([]auth.User, 0, len(s.byName))
 	for _, u := range s.byName {

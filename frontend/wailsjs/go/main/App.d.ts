@@ -11,6 +11,10 @@ export function AgentChat(arg1:main.AgentChatRequest):Promise<agent.ChatResponse
 
 export function Connect(arg1:string):Promise<void>;
 
+export function CreateDatabase(arg1:string,arg2:db.CreateDatabaseSpec):Promise<db.CreateDatabaseResult>;
+
+export function CreateDatabaseOptions(arg1:string):Promise<db.CreateDatabaseOptions>;
+
 export function DeleteConnection(arg1:string):Promise<void>;
 
 export function DeleteLLMProfile(arg1:string):Promise<void>;

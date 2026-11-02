@@ -93,6 +93,16 @@ AIDB_COOKIE_SECURE=true \
 PowerShell: set vars with `$env:AIDB_MYSQL_DSN='...'` (one per line) then run
 `.\build\bin\aidb-server.exe`.
 
+### Local dev (VS Code F5)
+
+`.vscode/launch.json` ships a `Server (cmd/server)` launch configuration: press
+**F5** to build+run the server under the debugger with local-dev env —
+`AIDB_MYSQL_DSN` pointing at `127.0.0.1:3306` and a bootstrap admin
+(`admin` / `admin123456`, only minted on an empty users table; change it). Edit
+the `env` block to match your local MySQL. Prerequisite: `frontend/dist` must
+exist once (`cd frontend && npm install && npm run build`) because the binary
+embeds it.
+
 ### Environment variables
 
 | Variable | Default | Purpose |

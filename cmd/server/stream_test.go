@@ -9,7 +9,7 @@ import (
 
 func streamMux(s *server) *http.ServeMux {
 	mux := http.NewServeMux()
-	mux.Handle("POST /api/AgentChatStream", s.sessions.Middleware(http.HandlerFunc(s.handleAgentChatStream)))
+	mux.Handle("POST /api/AgentChatStream", s.gate(http.HandlerFunc(s.handleAgentChatStream)))
 	return mux
 }
 

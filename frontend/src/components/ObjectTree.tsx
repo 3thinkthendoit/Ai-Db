@@ -382,7 +382,16 @@ export function ObjectTree({ active = true, connectionId, connected, nodes, sele
   }
 
   return (
-    <ul className="object-tree" ref={rootRef}>
+    <ul
+      className="object-tree"
+      ref={rootRef}
+      onContextMenu={(e) => {
+        // Background right-click (the list itself, not a node row).
+        if (!onContextMenu || e.target !== rootRef.current) return
+        e.preventDefault()
+        onContextMenu({ kind: 'root', name: '' }, [], e.clientX, e.clientY)
+      }}
+    >
       {nodes.map((n) => (
         <NodeRow
           key={`${n.kind}:${n.name}`}

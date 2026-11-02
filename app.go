@@ -139,6 +139,18 @@ func (a *App) ExecuteQuery(connectionID, query string) (*db.QueryResult, error) 
 	return a.svc.ExecuteQuery(a.bgCtx(), a.local(), connectionID, query)
 }
 
+// CreateDatabaseOptions returns charset/collation (MySQL) or encoding (Postgres)
+// candidates for the create-database dialog.
+func (a *App) CreateDatabaseOptions(connectionID string) (db.CreateDatabaseOptions, error) {
+	return a.svc.CreateDatabaseOptions(a.bgCtx(), a.local(), connectionID)
+}
+
+// CreateDatabase creates a database and optionally a login account that is
+// granted on it (MySQL: CREATE USER + GRANT ALL; Postgres: ROLE + OWNER).
+func (a *App) CreateDatabase(connectionID string, spec db.CreateDatabaseSpec) (*db.CreateDatabaseResult, error) {
+	return a.svc.CreateDatabase(a.bgCtx(), a.local(), connectionID, spec)
+}
+
 // SetActiveSchema remembers the workbench-selected database/schema for an open connection.
 func (a *App) SetActiveSchema(connectionID, schema string) error {
 	return a.svc.SetActiveSchema(a.bgCtx(), a.local(), connectionID, schema)

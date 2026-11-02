@@ -116,7 +116,7 @@ button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
 
 /* TablePlus-like light buttons — skip chrome/icon controls (send, twist, msg-action, …). */
 /* Skip segmented prefs (pill-seg .on) and sidebar/nav chrome — they own their own chrome. */
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on) {
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye) {
   font-weight: 500;
   border-radius: 6px;
   min-height: 28px;
@@ -126,7 +126,7 @@ button.sm { padding: 0 10px; font-size: 12px; min-height: 28px; }
   color: var(--text);
   box-shadow: 0 0.5px 0 rgba(255, 255, 255, 0.8) inset;
 }
-[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):hover:not(:disabled) {
+[data-theme='light'] button:not(.tree-twist):not(.send-btn):not(.msg-action):not(.chip-more):not(.chip):not(.model-menu-item):not(.sm-page):not(.sm-trigger):not(.nav-btn):not(.pick-conn-item):not(.on):not(.login-eye):hover:not(:disabled) {
   background: #efefef;
   border-color: #bdbdbd;
 }

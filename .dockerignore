@@ -1,0 +1,30 @@
+# VCS / CI / editor
+.git
+.gitignore
+.github
+.vscode
+**/.vscode
+**/.DS_Store
+
+# Docs and Windows/desktop-only build helpers
+*.md
+pack.bat
+scripts/
+
+# Generated artifacts — frontend/dist is rebuilt inside the image and re-staged
+# into frontend/ before the Go compile (see Dockerfile); shipping a local copy in
+# the context would silently date the embedded UI.
+frontend/dist
+build/
+data/
+tmp_*.txt
+
+# Dependencies — installed per-stage
+**/node_modules
+
+# Local binaries and secrets
+**/*.exe
+**/__debug_bin*
+*.log
+.env
+.env.*

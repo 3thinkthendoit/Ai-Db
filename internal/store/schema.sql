@@ -1,14 +1,21 @@
 -- AI-DB server schema.
 -- users + connections (Phase 0/1) and llm_profiles + user_settings (Phase 2).
--- There is no sessions table: the server uses stateless HMAC cookies, so logout
--- clears the client cookie and server-side revocation is a later phase. All
--- tenant data carries owner_id and every query MUST filter by it.
+-- There is no sessions table: the server uses stateless HMAC cookies. Logout
+-- clears the client cookie; password changes bump users.token_version so older
+-- cookies fail Gate. All tenant data carries owner_id and every query MUST filter by it.
 
 CREATE TABLE IF NOT EXISTS users (
   id            VARCHAR(36)  NOT NULL,
   username      VARCHAR(64)  NOT NULL,
   password_hash VARCHAR(255) NOT NULL,
   role          VARCHAR(16)  NOT NULL DEFAULT 'user',
+  -- display_name / avatar are self-service profile fields (login username stays fixed).
+  display_name  VARCHAR(64)  NOT NULL DEFAULT '',
+  avatar        MEDIUMTEXT   NULL,
+  -- banned=1 blocks login; admin console can toggle without deleting the row.
+  banned        TINYINT(1)   NOT NULL DEFAULT 0,
+  -- token_version bumps on password change; session cookies carry the same ver.
+  token_version INT          NOT NULL DEFAULT 0,
   created_at    DATETIME     NOT NULL,
   updated_at    DATETIME     NOT NULL,
   PRIMARY KEY (id),

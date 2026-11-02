@@ -42,7 +42,7 @@ function invoke<T>(method: string, ...args: unknown[]): Promise<T> {
   return call<T>(method, ...args)
 }
 
-// —— Bound methods (all 21; signatures mirror wailsjs/go/main/App.d.ts) ——
+// —— Bound methods (all 23; signatures mirror wailsjs/go/main/App.d.ts) ——
 
 // connections
 export const ListConnections = (): Promise<Array<config.Connection>> => invoke('ListConnections')
@@ -59,6 +59,42 @@ export const ExecuteQuery = (arg1: string, arg2: string): Promise<db.QueryResult
 export const SetActiveSchema = (arg1: string, arg2: string): Promise<void> => invoke('SetActiveSchema', arg1, arg2)
 export const IsMutatingQuery = (arg1: string, arg2: string): Promise<boolean> => invoke('IsMutatingQuery', arg1, arg2)
 export const WritesAllowed = (): Promise<boolean> => invoke('WritesAllowed')
+
+// create-database dialog (MySQL / PostgreSQL connections only)
+export interface CharsetOption {
+  name: string
+  defaultCollation: string
+  collations: string[]
+}
+
+export interface CreateDatabaseOptions {
+  /** MySQL charsets with collations; empty on PostgreSQL. */
+  charsets: CharsetOption[]
+  /** PostgreSQL candidate ENCODING values; empty on MySQL. */
+  encodings: string[]
+}
+
+export interface CreateDatabaseSpec {
+  name: string
+  charset?: string
+  collate?: string
+  encoding?: string
+  account?: string
+  password?: string
+  host?: string
+}
+
+export interface CreateDatabaseResult {
+  ok: boolean
+  completed: string[]
+  failedStep?: string
+  error?: string
+}
+
+export const CreateDatabaseOptions = (arg1: string): Promise<CreateDatabaseOptions> =>
+  invoke('CreateDatabaseOptions', arg1)
+export const CreateDatabase = (arg1: string, arg2: CreateDatabaseSpec): Promise<CreateDatabaseResult> =>
+  invoke('CreateDatabase', arg1, arg2)
 
 // LLM
 export const GetLLMConfig = (): Promise<config.LLMConfig> => invoke('GetLLMConfig')
@@ -160,6 +196,8 @@ export interface AdminUser {
   id: string
   username: string
   role: string
+  displayName: string
+  banned: boolean
 }
 
 export interface AdminCreateResult {
@@ -170,6 +208,16 @@ export interface AdminCreateResult {
   role?: string
 }
 
+export interface AdminMutateResult {
+  ok: boolean
+  error?: string
+  id?: string
+  username?: string
+  role?: string
+  displayName?: string
+  banned?: boolean
+}
+
 /** List all accounts (admin-only). */
 export async function adminListUsers(): Promise<AdminUser[]> {
   const res = await fetch('/api/admin/users', { credentials: 'include' })
@@ -178,6 +226,16 @@ export async function adminListUsers(): Promise<AdminUser[]> {
     throw new Error(body.error || res.statusText)
   }
   return (await res.json()) as AdminUser[]
+}
+
+async function readAdminJSON<T extends { ok?: boolean; error?: string }>(
+  res: Response
+): Promise<T> {
+  const body = (await res.json().catch(() => ({}))) as T & ApiErrorBody
+  if (!res.ok) {
+    return { ...(body as T), ok: false, error: body.error || res.statusText || String(res.status) }
+  }
+  return body
 }
 
 /** Create an account (admin-only). Role defaults to "user" server-side. */
@@ -192,7 +250,35 @@ export async function adminCreateUser(
     credentials: 'include',
     body: JSON.stringify({ username, password, role }),
   })
-  return (await res.json()) as AdminCreateResult
+  return readAdminJSON<AdminCreateResult>(res)
+}
+
+/** Patch role / display name / ban flag (admin-only). */
+export async function adminUpdateUser(
+  id: string,
+  patch: { role?: string; displayName?: string; banned?: boolean }
+): Promise<AdminMutateResult> {
+  const res = await fetch(`/api/admin/users/${encodeURIComponent(id)}`, {
+    method: 'PATCH',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(patch),
+  })
+  return readAdminJSON<AdminMutateResult>(res)
+}
+
+/** Admin reset of another account's password (no current password required). */
+export async function adminSetPassword(
+  id: string,
+  password: string
+): Promise<AdminMutateResult> {
+  const res = await fetch(`/api/admin/users/${encodeURIComponent(id)}/password`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ password }),
+  })
+  return readAdminJSON<AdminMutateResult>(res)
 }
 
 // —— Auth endpoints (web only; the desktop build never calls these) ——
@@ -227,4 +313,57 @@ export async function logout(): Promise<void> {
 export async function session(): Promise<SessionInfo> {
   const res = await fetch('/api/session', { credentials: 'include' })
   return (await res.json()) as SessionInfo
+}
+
+// —— Self-service profile (web only) ——
+
+export interface ProfileInfo {
+  username: string
+  role: string
+  displayName: string
+  avatar: string
+}
+
+export interface ProfileUpdateResult {
+  ok: boolean
+  error?: string
+  username?: string
+  role?: string
+  displayName?: string
+  avatar?: string
+}
+
+export async function getProfile(): Promise<ProfileInfo> {
+  const res = await fetch('/api/me', { credentials: 'include' })
+  if (!res.ok) {
+    const body = (await res.json().catch(() => ({}))) as ApiErrorBody
+    throw new Error(body.error || res.statusText)
+  }
+  return (await res.json()) as ProfileInfo
+}
+
+export async function updateProfile(patch: {
+  displayName?: string
+  avatar?: string
+}): Promise<ProfileUpdateResult> {
+  const res = await fetch('/api/me', {
+    method: 'PUT',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify(patch),
+  })
+  return (await res.json()) as ProfileUpdateResult
+}
+
+export async function changePassword(
+  currentPassword: string,
+  newPassword: string
+): Promise<{ ok: boolean; error?: string }> {
+  const res = await fetch('/api/me/password', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    credentials: 'include',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+  return (await res.json()) as { ok: boolean; error?: string }
 }

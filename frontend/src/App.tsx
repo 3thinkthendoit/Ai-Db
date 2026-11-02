@@ -9,8 +9,10 @@ import { AgentWorkspace } from './pages/AgentWorkspace'
 import { ConnectionsView } from './pages/ConnectionsView'
 import { PrefsView } from './pages/PrefsView'
 import { QueryView } from './pages/QueryView'
+import { AdminView } from './pages/AdminView'
+import { ProfileView } from './pages/ProfileView'
 import { SettingsView } from './pages/SettingsView'
-import { AppMode, ChatMessage, Connection, ObjectNode, emptyConnection } from './types'
+import { AccountSession, AppMode, ChatMessage, Connection, ObjectNode, emptyConnection } from './types'
 import { useI18n } from './i18n'
 import {
   createTask,
@@ -61,7 +63,12 @@ function preferSchemaForConn(conn: Connection | null | undefined, schemaOptions:
   return schemaOptions[0] || prefer
 }
 
-function App() {
+interface AppProps {
+  /** Web-only; desktop build mounts <App/> with no account chrome. */
+  account?: AccountSession
+}
+
+function App({ account }: AppProps) {
   const { t } = useI18n()
   const [mode, setMode] = useState<AppMode>('work')
   const [connections, setConnections] = useState<Connection[]>([])
@@ -529,7 +536,21 @@ function App() {
           </div>
 
           <div className="posture">
-            <SettingsMenu activePage={menuActivePage} onPage={openWorkPage} />
+            <SettingsMenu
+              activePage={menuActivePage}
+              onPage={openWorkPage}
+              account={
+                account
+                  ? {
+                      username: account.username,
+                      role: account.role,
+                      displayName: account.displayName,
+                      avatar: account.avatar,
+                      onLogout: account.onLogout,
+                    }
+                  : undefined
+              }
+            />
           </div>
         </aside>
       )}
@@ -705,6 +726,12 @@ function App() {
         )}
         {mode === 'prefs' && <PrefsView />}
         {mode === 'settings' && <SettingsView />}
+        {mode === 'profile' && account && (
+          <ProfileView onUpdated={account.onProfileUpdated} />
+        )}
+        {mode === 'admin' && account?.role === 'admin' && (
+          <AdminView selfUsername={account.username} />
+        )}
       </main>
 
       {pickConnPurpose && (

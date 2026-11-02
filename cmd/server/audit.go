@@ -82,6 +82,14 @@ func (a *auditLog) adminListUsers(r *http.Request, actor string, count int, outc
 	a.emit(auditRecord{Event: "admin_list_users", Actor: actor, IP: clientIP(r), Outcome: outcome, Detail: strconv.Itoa(count)})
 }
 
+func (a *auditLog) adminUpdateUser(r *http.Request, actor, target, outcome, detail string) {
+	a.emit(auditRecord{Event: "admin_update_user", Actor: actor, IP: clientIP(r), Target: target, Outcome: outcome, Detail: detail})
+}
+
+func (a *auditLog) adminSetPassword(r *http.Request, actor, target, outcome string) {
+	a.emit(auditRecord{Event: "admin_set_password", Actor: actor, IP: clientIP(r), Target: target, Outcome: outcome})
+}
+
 // —— RPC events ——
 
 // auditedRPCMethods are the mutating / egress-probing service methods whose

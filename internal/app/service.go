@@ -448,6 +448,83 @@ func (s *Service) ExecuteQuery(ctx context.Context, p Principal, connectionID, q
 	return drv.Execute(ctx, query, cfg.LLM.MaxRows, cfg.LLM.AllowWrites)
 }
 
+// CreateDatabaseOptions returns the dialog dropdown candidates: MySQL charsets
+// with their collations (one read-only introspection query), Postgres encodings
+// (compile-time fixed list). Other connection types have no such semantics.
+func (s *Service) CreateDatabaseOptions(ctx context.Context, p Principal, connectionID string) (db.CreateDatabaseOptions, error) {
+	s.mu.Lock()
+	c, err := s.findConnLocked(ctx, p, connectionID)
+	s.mu.Unlock()
+	if err != nil {
+		return db.CreateDatabaseOptions{}, err
+	}
+	switch c.Type {
+	case config.ConnMySQL:
+		drv, release, err := s.mgr.Acquire(connectionID)
+		if err != nil {
+			return db.CreateDatabaseOptions{}, err
+		}
+		defer release()
+		res, err := drv.Execute(ctx, db.MySQLCollationsSQL, 4000, false)
+		if err != nil {
+			return db.CreateDatabaseOptions{}, err
+		}
+		return db.GroupMySQLCollations(res), nil
+	case config.ConnPostgres:
+		return db.CreateDatabaseOptions{Encodings: db.PGEncodings()}, nil
+	default:
+		return db.CreateDatabaseOptions{}, fmt.Errorf("create database is not supported for %s connections", c.Type)
+	}
+}
+
+// CreateDatabase runs the ordered creation steps (database → account → grant).
+// DDL is not transactional, so a mid-flow failure returns OK=false naming the
+// failed step while earlier steps stay applied. Requires Allow Writes.
+func (s *Service) CreateDatabase(ctx context.Context, p Principal, connectionID string, spec db.CreateDatabaseSpec) (*db.CreateDatabaseResult, error) {
+	s.mu.Lock()
+	c, err := s.findConnLocked(ctx, p, connectionID)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	loaded, err := s.ensureCfgLocked(ctx, p)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	allowWrites := loaded.LLM.AllowWrites
+	timeout := s.hardening.QueryTimeout
+	s.mu.Unlock()
+	if !allowWrites {
+		return nil, fmt.Errorf("write/DDL statement blocked (enable Allow Writes in settings): CREATE DATABASE")
+	}
+	steps, err := db.BuildCreateDatabaseStatements(c.Type, spec)
+	if err != nil {
+		return nil, err
+	}
+	if timeout > 0 {
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
+	drv, release, err := s.mgr.Acquire(connectionID)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	res := &db.CreateDatabaseResult{OK: true}
+	for _, step := range steps {
+		if _, err := drv.Execute(ctx, step.SQL, 1, true); err != nil {
+			res.OK = false
+			res.FailedStep = step.Label
+			res.Error = err.Error()
+			return res, nil
+		}
+		res.Completed = append(res.Completed, step.Label)
+	}
+	return res, nil
+}
+
 // SetActiveSchema remembers the workbench-selected database/schema. Ownership of
 // connectionID is verified before touching the global manager.
 func (s *Service) SetActiveSchema(ctx context.Context, p Principal, connectionID, schema string) error {

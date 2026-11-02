@@ -1,0 +1,132 @@
+name: Docker Publish (ACR)
+
+# 手动触发：Actions 页面点击 "Run workflow"，可自定义镜像 tag
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: '镜像 tag（默认 latest）'
+        type: string
+        required: false
+        default: latest
+
+# 镜像推送到阿里云 ACR。
+# 仓库 Settings > Secrets and variables > Actions 需配置：
+#   ACR_REGISTRY   例：registry.cn-hangzhou.aliyuncs.com（企业版用 <实例>-<region>.registry.<region>.aliyuncs.com）
+#   ACR_USERNAME / ACR_PASSWORD   固定密码或临时凭证
+env:
+  ACR_REGISTRY: ${{ secrets.ACR_REGISTRY }}
+  ACR_NAMESPACE: 3thinkthendoit
+  IMAGE_NAME: ai-db
+
+concurrency:
+  group: docker-publish
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    # 冒烟启动需要可连的 MySQL（不做 go test）。前端已 embed 进二进制，无需额外静态目录。
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_ROOT_PASSWORD: root
+          MYSQL_DATABASE: aidb_ci
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -uroot -proot"
+          --health-interval=5s
+          --health-timeout=5s
+          --health-retries=30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          driver: docker
+
+      - name: Login to Aliyun ACR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.ACR_REGISTRY }}
+          username: ${{ secrets.ACR_USERNAME }}
+          password: ${{ secrets.ACR_PASSWORD }}
+
+      - name: Resolve tags
+        id: tags
+        run: |
+          TAG="${{ github.event.inputs.tag || 'latest' }}"
+          BASE="${{ env.ACR_REGISTRY }}/${{ env.ACR_NAMESPACE }}/${{ env.IMAGE_NAME }}"
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+          echo "image_latest=${BASE}:${TAG}" >> "$GITHUB_OUTPUT"
+          echo "image_sha=${BASE}:${{ github.sha }}" >> "$GITHUB_OUTPUT"
+
+      - name: Build (load)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Dockerfile
+          load: true
+          push: false
+          tags: |
+            ${{ steps.tags.outputs.image_latest }}
+            ${{ steps.tags.outputs.image_sha }}
+
+      # host network：容器与 runner 共用网络，直连 service 映射的 127.0.0.1:3306 / :8080
+      - name: Smoke embedded UI + auth
+        run: |
+          set -euo pipefail
+          IMG="${{ steps.tags.outputs.image_sha }}"
+          CID=$(docker run -d --network host \
+            -e AIDB_DATA_DIR=/tmp/aidb \
+            -e AIDB_MYSQL_DSN='root:root@tcp(127.0.0.1:3306)/aidb_ci?parseTime=true&charset=utf8mb4' \
+            -e AIDB_COOKIE_SECURE=false \
+            -e AIDB_ADMIN_USERNAME=ciadmin \
+            -e AIDB_ADMIN_PASSWORD=ci-smoke-pwd \
+            "$IMG")
+          cleanup() {
+            rc=$?
+            if [ "$rc" -ne 0 ]; then docker logs "$CID" 2>&1 | tail -n 60 || true; fi
+            docker rm -f "$CID" >/dev/null 2>&1 || true
+          }
+          trap cleanup EXIT
+          for i in $(seq 1 60); do
+            if curl -fsS "http://127.0.0.1:8080/api/session" | grep -q '"authenticated"'; then
+              break
+            fi
+            sleep 1
+            if [ "$i" -eq 60 ]; then exit 1; fi
+          done
+          # 前端确实嵌入了镜像：index.html + hash 后的静态资源都要能取到
+          # （先存进变量再提取，避开 pipefail 下的 SIGPIPE 竞态）
+          HTML=$(curl -fsS "http://127.0.0.1:8080/")
+          printf '%s' "$HTML" | grep -qi '<html'
+          ASSET=$(printf '%s' "$HTML" | grep -oE '/assets/[^"]+' | head -n1 || true)
+          test -n "$ASSET"
+          curl -fsS "http://127.0.0.1:8080${ASSET}" -o /dev/null
+          # SPA 回退：前端路由路径不应 404
+          curl -fsS "http://127.0.0.1:8080/query" | grep -qi '<html'
+          # 未登录的 RPC 必须 401，未匹配的 /api 不能被 index.html 兜底
+          code=$(curl -s -o /dev/null -w '%{http_code}' -X POST -H 'Content-Type: application/json' \
+            -d '{"args":[]}' "http://127.0.0.1:8080/api/ListConnections")
+          test "$code" = "401"
+          code=$(curl -s -o /dev/null -w '%{http_code}' "http://127.0.0.1:8080/api/Nope")
+          test "$code" = "404"
+          # 登录换会话 cookie，再带 cookie 调 RPC（{args:[...]} 信封，空 body 会 400）
+          curl -fsS -c /tmp/j.txt -X POST -H 'Content-Type: application/json' \
+            -d '{"username":"ciadmin","password":"ci-smoke-pwd"}' \
+            "http://127.0.0.1:8080/api/login" | grep -q '"ok":true'
+          curl -fsS -b /tmp/j.txt -X POST -H 'Content-Type: application/json' \
+            -d '{"args":[]}' "http://127.0.0.1:8080/api/ListConnections" | grep -q '\['
+          # admin 会话可用管理端点（列表里应有刚 bootstrap 的账号）
+          curl -fsS -b /tmp/j.txt "http://127.0.0.1:8080/api/admin/users" | grep -q 'ciadmin'
+
+      - name: Push
+        run: |
+          set -euo pipefail
+          docker push "${{ steps.tags.outputs.image_latest }}"
+          docker push "${{ steps.tags.outputs.image_sha }}"

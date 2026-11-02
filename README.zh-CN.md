@@ -91,6 +91,14 @@ AIDB_COOKIE_SECURE=true \
 PowerShell：用 `$env:AIDB_MYSQL_DSN='...'` 逐行设置变量，再运行
 `.\build\bin\aidb-server.exe`。
 
+### 本地开发（VS Code F5）
+
+`.vscode/launch.json` 内置 `Server (cmd/server)` 启动配置：按 **F5** 即可以调试模式
+构建并运行服务端，环境变量为本地开发值——`AIDB_MYSQL_DSN` 指向
+`127.0.0.1:3306`，以及引导管理员（`admin` / `admin123456`，仅在用户表为空时创建，请自行修改）。
+按本地 MySQL 实际情况编辑 `env` 块即可。前置条件：`frontend/dist` 需先存在一次
+（`cd frontend && npm install && npm run build`），因为二进制内嵌它。
+
 ### 环境变量
 
 | 变量 | 默认值 | 说明 |

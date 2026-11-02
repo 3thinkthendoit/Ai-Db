@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import { MarkdownBody } from '../components/MarkdownBody'
+import { CreateDatabaseModal } from '../components/CreateDatabaseModal'
 import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
@@ -56,6 +57,7 @@ type CtxAction =
   | 'createTrigger'
   | 'createEvent'
   | 'createSequence'
+  | 'createDatabase'
   | 'dropObject'
   | 'callRoutine'
   | 'showIndexes'
@@ -190,7 +192,8 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
         ]
       }
       const items: MenuEntry[] = [
-        ...(connType === 'mysql' ? [{ action: 'useSchema' as const, labelKey: 'query.ctx.useSchema' }] : []),
+        { action: 'createDatabase', labelKey: 'query.ctx.createDatabase' },
+        { sep: true },
         { action: 'createTable', labelKey: 'query.ctx.createTable' },
         { action: 'createView', labelKey: 'query.ctx.createView' },
         { action: 'createProcedure', labelKey: 'query.ctx.createProcedure' },
@@ -209,6 +212,12 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
       items.push({ sep: true }, copy)
       return items
     }
+    case 'root':
+      // Tree background right-click: catalog-level creation only.
+      if (connType === 'mysql' || connType === 'postgres') {
+        return [{ action: 'createDatabase', labelKey: 'query.ctx.createDatabase' }]
+      }
+      return []
     case 'folder:tables':
       return [
         { action: 'createTable', labelKey: 'query.ctx.createTable' },
@@ -391,6 +400,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   const [resultCounter, setResultCounter] = useState(0)
   const [runningTabId, setRunningTabId] = useState<string | null>(null)
   const [ctx, setCtx] = useState<CtxMenu | null>(null)
+  const [createDbOpen, setCreateDbOpen] = useState(false)
   const [toast, setToast] = useState('')
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null)
   const [importCsv, setImportCsv] = useState('')
@@ -410,6 +420,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     setCopyDbTarget('')
     setCopyDbErr('')
     setCopyDbBusy(false)
+    setCreateDbOpen(false)
   }, [connectionId])
   const resultTabsRef = useRef(resultTabs)
   const resultCounterRef = useRef(resultCounter)
@@ -755,7 +766,6 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         return { mode: 'run', sql: `SHOW CREATE TABLE ${ref}` }
       }
       case 'useSchema':
-        if (connType === 'mysql') return { mode: 'run', sql: `USE ${qi(node.name)}` }
         if (connType === 'mongo') return { mode: 'run', sql: `use ${node.name}` }
         return null
       case 'createTable':
@@ -1069,6 +1079,11 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
     if (!ctx) return
     const { node, path } = ctx
     setCtx(null)
+
+    if (action === 'createDatabase') {
+      setCreateDbOpen(true)
+      return
+    }
 
     if (action === 'copyName') {
       let text = node.name
@@ -1518,6 +1533,18 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           )}
         </div>
       </section>
+
+      {createDbOpen && (
+        <CreateDatabaseModal
+          connectionId={connectionId}
+          connType={connType}
+          onClose={() => setCreateDbOpen(false)}
+          onCreated={() => {
+            onRefreshObjects()
+            flash(t('query.createDb.done'))
+          }}
+        />
+      )}
 
       {ctx && menuItems.length > 0 && (
         <div className="ctx-menu" ref={menuRef} style={menuStyle} role="menu">

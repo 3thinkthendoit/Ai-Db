@@ -37,16 +37,21 @@ func (m *memStore) Save(_ context.Context, userID string, cfg *config.AppConfig)
 
 func newTestServer(_ *testing.T) (*server, *auth.SessionManager) {
 	sessions := auth.NewSessionManager(make([]byte, 32), time.Hour, false)
+	// Gate reloads accounts by id; seed the principal used by sessionCookie helpers.
+	users := &stubUsers{byName: map[string]auth.User{
+		"alice": {ID: "u1", Username: "alice", Role: auth.RoleUser},
+	}}
 	s := &server{
 		svc:      app.NewService(&memStore{}, db.NewManager()),
 		sessions: sessions,
+		users:    users,
 	}
 	return s, sessions
 }
 
 func sessionCookie(t *testing.T, sessions *auth.SessionManager, userID, username, role string) *http.Cookie {
 	t.Helper()
-	value, err := sessions.Issue(userID, username, role)
+	value, err := sessions.Issue(userID, username, role, 0)
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
@@ -57,12 +62,13 @@ func sessionCookie(t *testing.T, sessions *auth.SessionManager, userID, username
 var apiMethods = []string{
 	"ListConnections", "UpsertConnection", "DeleteConnection", "TestConnection",
 	"Connect", "Disconnect", "ListObjects", "ExpandObject", "ExecuteQuery",
+	"CreateDatabaseOptions", "CreateDatabase",
 	"SetActiveSchema", "IsMutatingQuery", "WritesAllowed", "GetLLMConfig",
 	"ListLLMProfiles", "SaveLLMProfile", "DeleteLLMProfile", "ActivateLLMProfile",
 	"SaveLLMSafety", "TestLLMProfile", "SaveLLMConfig", "AgentChat",
 }
 
-// TestRegisterAPIRoutes verifies all 21 endpoints register on the ServeMux
+// TestRegisterAPIRoutes verifies all 23 endpoints register on the ServeMux
 // without a pattern conflict (Go 1.22 mux panics at registration on conflict)
 // and that the session gate rejects unauthenticated calls with 401 — proving the
 // routes exist (a 404 would mean the pattern never registered).
@@ -71,8 +77,8 @@ func TestRegisterAPIRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux) // must not panic
 
-	if len(apiMethods) != 21 {
-		t.Fatalf("expected 21 bound methods, got %d", len(apiMethods))
+	if len(apiMethods) != 23 {
+		t.Fatalf("expected 23 bound methods, got %d", len(apiMethods))
 	}
 	for _, m := range apiMethods {
 		req := httptest.NewRequest(http.MethodPost, "/api/"+m, strings.NewReader(`{"args":[]}`))
@@ -189,7 +195,10 @@ func (failStore) Save(context.Context, string, *config.AppConfig) error {
 // cannot leak the operator's internal DB address to a tenant.
 func TestRPCSanitizesInternalStoreError(t *testing.T) {
 	sessions := auth.NewSessionManager(make([]byte, 32), time.Hour, false)
-	s := &server{svc: app.NewService(failStore{}, db.NewManager()), sessions: sessions}
+	users := &stubUsers{byName: map[string]auth.User{
+		"alice": {ID: "u1", Username: "alice", Role: auth.RoleUser},
+	}}
+	s := &server{svc: app.NewService(failStore{}, db.NewManager()), sessions: sessions, users: users}
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux)
 
