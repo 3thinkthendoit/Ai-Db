@@ -415,7 +415,13 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 				limit = n
 			}
 		}
-		out, err := s.svc.ListMutations(ctx, p, status, limit)
+		mineOnly := false
+		if len(args) > 2 {
+			if b, err := argJSON[bool](args, 2); err == nil {
+				mineOnly = b
+			}
+		}
+		out, err := s.svc.ListMutations(ctx, p, status, limit, mineOnly)
 		if err != nil {
 			return nil, err
 		}
@@ -423,6 +429,27 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 			return []app.MutationView{}, nil
 		}
 		return out, nil
+	})
+	s.route(mux, "SubmitMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		connID, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		sqlText, err := argString(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		title, remark, demand := "", "", ""
+		if len(args) > 2 {
+			title, _ = argString(args, 2)
+		}
+		if len(args) > 3 {
+			remark, _ = argString(args, 3)
+		}
+		if len(args) > 4 {
+			demand, _ = argString(args, 4)
+		}
+		return s.svc.SubmitMutation(ctx, p, connID, sqlText, title, remark, demand)
 	})
 	s.route(mux, "ListQueryAudit", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
 		limit := 100
@@ -449,7 +476,18 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 		if len(args) > 1 {
 			note, _ = argString(args, 1)
 		}
-		return s.svc.ApproveMutation(ctx, p, id, note)
+		return nil, s.svc.ApproveMutation(ctx, p, id, note)
+	})
+	s.route(mux, "ExecuteMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return s.svc.ExecuteMutation(ctx, p, id, note)
 	})
 	s.route(mux, "RejectMutation", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
 		id, err := argString(args, 0)
@@ -472,5 +510,107 @@ func (s *server) registerAPIRoutes(mux *http.ServeMux) {
 			note, _ = argString(args, 1)
 		}
 		return s.svc.RollbackMutation(ctx, p, id, note)
+	})
+
+	// —— table-level query grants / privilege applications ——
+	s.route(mux, "ListConnectionCatalog", func(ctx context.Context, p app.Principal, _ []json.RawMessage) (any, error) {
+		out, err := s.svc.ListConnectionCatalog(ctx, p)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return []app.ConnectionCatalogItem{}, nil
+		}
+		return out, nil
+	})
+	s.route(mux, "ListGrants", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		limit := 200
+		if len(args) > 0 {
+			if n, err := argJSON[int](args, 0); err == nil {
+				limit = n
+			}
+		}
+		out, err := s.svc.ListGrants(ctx, p, limit)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return []app.GrantView{}, nil
+		}
+		return out, nil
+	})
+	s.route(mux, "ListPrivilegeRequests", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		status := ""
+		if len(args) > 0 {
+			status, _ = argString(args, 0)
+		}
+		limit := 200
+		if len(args) > 1 {
+			if n, err := argJSON[int](args, 1); err == nil {
+				limit = n
+			}
+		}
+		mineOnly := false
+		if len(args) > 2 {
+			if b, err := argJSON[bool](args, 2); err == nil {
+				mineOnly = b
+			}
+		}
+		out, err := s.svc.ListPrivilegeRequests(ctx, p, status, limit, mineOnly)
+		if err != nil {
+			return nil, err
+		}
+		if out == nil {
+			return []app.PrivilegeRequestView{}, nil
+		}
+		return out, nil
+	})
+	s.route(mux, "SubmitPrivilegeRequest", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		connID, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		dbName, err := argString(args, 1)
+		if err != nil {
+			return nil, err
+		}
+		tables, err := argString(args, 2)
+		if err != nil {
+			return nil, err
+		}
+		remark := ""
+		if len(args) > 3 {
+			remark, _ = argString(args, 3)
+		}
+		return nil, s.svc.SubmitPrivilegeRequest(ctx, p, connID, dbName, tables, remark)
+	})
+	s.route(mux, "ApprovePrivilegeRequest", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return nil, s.svc.ApprovePrivilegeRequest(ctx, p, id, note)
+	})
+	s.route(mux, "RejectPrivilegeRequest", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		note := ""
+		if len(args) > 1 {
+			note, _ = argString(args, 1)
+		}
+		return nil, s.svc.RejectPrivilegeRequest(ctx, p, id, note)
+	})
+	s.route(mux, "RevokeGrant", func(ctx context.Context, p app.Principal, args []json.RawMessage) (any, error) {
+		id, err := argString(args, 0)
+		if err != nil {
+			return nil, err
+		}
+		return nil, s.svc.RevokeGrant(ctx, p, id)
 	})
 }

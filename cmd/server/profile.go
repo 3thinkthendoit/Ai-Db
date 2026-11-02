@@ -34,6 +34,38 @@ func validatePassword(pw string) string {
 	return ""
 }
 
+func validateEmail(email string) string {
+	if email == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(email) > 128 {
+		return "邮箱过长（最多 128 字）"
+	}
+	at := strings.IndexByte(email, '@')
+	if at <= 0 || at == len(email)-1 || strings.Contains(email[at+1:], "@") {
+		return "邮箱格式不正确"
+	}
+	return ""
+}
+
+func validatePhone(phone string) string {
+	if phone == "" {
+		return ""
+	}
+	if utf8.RuneCountInString(phone) > 32 {
+		return "手机号过长（最多 32 字）"
+	}
+	for _, r := range phone {
+		switch {
+		case r >= '0' && r <= '9':
+		case r == '+' || r == '-' || r == ' ' || r == '(' || r == ')':
+		default:
+			return "手机号格式不正确"
+		}
+	}
+	return ""
+}
+
 func (s *server) handleGetMe(w http.ResponseWriter, r *http.Request) {
 	p, ok := auth.PrincipalFromContext(r.Context())
 	if !ok {

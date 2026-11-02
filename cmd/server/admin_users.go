@@ -11,7 +11,7 @@ import (
 	"AI-DB/internal/auth"
 )
 
-// handleAdminUpdateUser patches role / displayName / banned for one account.
+// handleAdminUpdateUser patches role / displayName / email / phone / banned.
 // Guards: cannot ban or demote yourself when that would leave zero active admins.
 func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	actor, ok := auth.PrincipalFromContext(r.Context())
@@ -27,6 +27,8 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 	var body struct {
 		Role        *string `json:"role"`
 		DisplayName *string `json:"displayName"`
+		Email       *string `json:"email"`
+		Phone       *string `json:"phone"`
 		Banned      *bool   `json:"banned"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
@@ -47,11 +49,23 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 
 	role := u.Role
 	displayName := u.DisplayName
+	email := u.Email
+	phone := u.Phone
 	banned := u.Banned
+	// DBA may manage user/dba accounts but must not touch admin accounts.
+	if actor.Role == auth.RoleDBA && u.Role == auth.RoleAdmin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "dba cannot modify admin accounts"})
+		return
+	}
 	if body.Role != nil {
 		role = strings.TrimSpace(*body.Role)
 		if !auth.ValidAccountRole(role) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin, dba, or user"})
+			return
+		}
+		// DBA must not promote anyone (including self) to admin.
+		if actor.Role == auth.RoleDBA && role == auth.RoleAdmin {
+			writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "dba cannot assign admin role"})
 			return
 		}
 	}
@@ -59,6 +73,20 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		displayName = strings.TrimSpace(*body.DisplayName)
 		if utf8.RuneCountInString(displayName) > 64 {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "名称过长（最多 64 字）"})
+			return
+		}
+	}
+	if body.Email != nil {
+		email = strings.TrimSpace(*body.Email)
+		if msg := validateEmail(email); msg != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
+			return
+		}
+	}
+	if body.Phone != nil {
+		phone = strings.TrimSpace(*body.Phone)
+		if msg := validatePhone(phone); msg != "" {
+			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
 			return
 		}
 	}
@@ -71,7 +99,7 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := s.users.UpdateAdmin(r.Context(), id, role, displayName, banned); err != nil {
+	if err := s.users.UpdateAdmin(r.Context(), id, role, displayName, email, phone, banned); err != nil {
 		if errors.Is(err, auth.ErrLastAdmin) {
 			writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "不能封禁或降级唯一管理员"})
 			return
@@ -88,6 +116,8 @@ func (s *server) handleAdminUpdateUser(w http.ResponseWriter, r *http.Request) {
 		"username":    u.Username,
 		"role":        role,
 		"displayName": displayName,
+		"email":       email,
+		"phone":       phone,
 		"banned":      banned,
 	})
 }
@@ -123,6 +153,10 @@ func (s *server) handleAdminSetPassword(w http.ResponseWriter, r *http.Request) 
 			return
 		}
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "查询用户失败"})
+		return
+	}
+	if actor.Role == auth.RoleDBA && u.Role == auth.RoleAdmin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "dba cannot reset admin passwords"})
 		return
 	}
 	hash, err := auth.HashPassword(body.Password)

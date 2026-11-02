@@ -12,12 +12,17 @@ CREATE TABLE IF NOT EXISTS users (
   -- display_name / avatar are self-service profile fields (login username stays fixed).
   display_name  VARCHAR(64)  NOT NULL DEFAULT '',
   avatar        MEDIUMTEXT   NULL,
+  -- email / phone are optional contact fields maintained by admins.
+  email         VARCHAR(128) NOT NULL DEFAULT '',
+  phone         VARCHAR(32)  NOT NULL DEFAULT '',
   -- banned=1 blocks login; admin console can toggle without deleting the row.
   banned        TINYINT(1)   NOT NULL DEFAULT 0,
   -- token_version bumps on password change; session cookies carry the same ver.
   token_version INT          NOT NULL DEFAULT 0,
   created_at    DATETIME     NOT NULL,
   updated_at    DATETIME     NOT NULL,
+  -- last_login_at is stamped on successful password login (nullable until first login).
+  last_login_at DATETIME     NULL,
   PRIMARY KEY (id),
   UNIQUE KEY uq_users_username (username)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
@@ -93,7 +98,7 @@ CREATE TABLE IF NOT EXISTS query_audit (
   KEY idx_qa_conn (connection_id, ts)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
 
--- Pending / executed / rolled-back mutating statements (DBA approval + rollback).
+-- SQL change tickets (DBA review → execute → optional DML rollback).
 CREATE TABLE IF NOT EXISTS mutation_requests (
   id              VARCHAR(36)  NOT NULL,
   created_at      DATETIME(3)  NOT NULL,
@@ -103,18 +108,62 @@ CREATE TABLE IF NOT EXISTS mutation_requests (
   connection_id   VARCHAR(36)  NOT NULL,
   conn_type       VARCHAR(16)  NOT NULL DEFAULT '',
   active_schema   VARCHAR(128) NOT NULL DEFAULT '',
+  title           VARCHAR(128) NOT NULL DEFAULT '',
+  remark          VARCHAR(512) NOT NULL DEFAULT '',
+  demand_url      VARCHAR(512) NOT NULL DEFAULT '',
   sql_text        MEDIUMTEXT   NOT NULL,
   stmt_class      VARCHAR(16)  NOT NULL DEFAULT '',
+  lint_result     VARCHAR(512) NOT NULL DEFAULT '',
   status          VARCHAR(16)  NOT NULL DEFAULT 'pending',
   rollbackable    TINYINT(1)   NOT NULL DEFAULT 0,
   before_image    LONGTEXT     NULL,
   reviewer_id     VARCHAR(36)  NOT NULL DEFAULT '',
   reviewer_name   VARCHAR(64)  NOT NULL DEFAULT '',
   review_note     VARCHAR(512) NOT NULL DEFAULT '',
+  approved_at     DATETIME(3)  NULL,
   executed_at     DATETIME(3)  NULL,
   rolled_back_at  DATETIME(3)  NULL,
   PRIMARY KEY (id),
   KEY idx_mr_status (status, created_at),
   KEY idx_mr_owner (owner_id, created_at),
   CONSTRAINT fk_mr_owner FOREIGN KEY (owner_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Table-level query grants (grantee may use a connection they do not own).
+CREATE TABLE IF NOT EXISTS query_grants (
+  id              VARCHAR(36)  NOT NULL,
+  created_at      DATETIME(3)  NOT NULL,
+  grantee_id      VARCHAR(36)  NOT NULL,
+  grantee_name    VARCHAR(64)  NOT NULL DEFAULT '',
+  connection_id   VARCHAR(36)  NOT NULL,
+  database_name   VARCHAR(128) NOT NULL,
+  table_name      VARCHAR(128) NOT NULL,
+  granted_by_id   VARCHAR(36)  NOT NULL DEFAULT '',
+  granted_by_name VARCHAR(64)  NOT NULL DEFAULT '',
+  PRIMARY KEY (id),
+  UNIQUE KEY uq_grant (grantee_id, connection_id, database_name, table_name),
+  KEY idx_grant_grantee (grantee_id),
+  KEY idx_grant_conn (connection_id),
+  CONSTRAINT fk_grant_grantee FOREIGN KEY (grantee_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;
+
+-- Privilege application tickets (table-level query access).
+CREATE TABLE IF NOT EXISTS query_privilege_requests (
+  id              VARCHAR(36)  NOT NULL,
+  created_at      DATETIME(3)  NOT NULL,
+  updated_at      DATETIME(3)  NOT NULL,
+  applicant_id    VARCHAR(36)  NOT NULL,
+  applicant_name  VARCHAR(64)  NOT NULL DEFAULT '',
+  connection_id   VARCHAR(36)  NOT NULL,
+  database_name   VARCHAR(128) NOT NULL,
+  table_name      VARCHAR(128) NOT NULL,
+  remark          VARCHAR(512) NOT NULL DEFAULT '',
+  status          VARCHAR(16)  NOT NULL DEFAULT 'pending',
+  reviewer_id     VARCHAR(36)  NOT NULL DEFAULT '',
+  reviewer_name   VARCHAR(64)  NOT NULL DEFAULT '',
+  review_note     VARCHAR(512) NOT NULL DEFAULT '',
+  PRIMARY KEY (id),
+  KEY idx_qpr_status (status, created_at),
+  KEY idx_qpr_applicant (applicant_id, created_at),
+  CONSTRAINT fk_qpr_applicant FOREIGN KEY (applicant_id) REFERENCES users(id) ON DELETE CASCADE
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4;

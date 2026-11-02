@@ -48,8 +48,8 @@ export function ConnectionsView(props: Props) {
   }
 
   return (
-    <div className="panel conn-panel">
-      <header className="panel-head panel-head-row">
+    <>
+      <div className="data-table-toolbar">
         <div>
           <h2>{t('conn.page.title')}</h2>
           <p>
@@ -58,56 +58,91 @@ export function ConnectionsView(props: Props) {
             {t('conn.page.hint.b')}
           </p>
         </div>
-        <button type="button" className="primary" onClick={props.onAdd}>{t('conn.add')}</button>
-      </header>
-
-      <div className="conn-list-cards">
-        {props.connections.length === 0 && (
-          <div className="card muted">{t('conn.empty')}</div>
-        )}
-
-        {props.connections.map((c) => {
-          const live = props.connectedIds.has(c.id)
-          const result = testResult[c.id]
-          return (
-            <div
-              key={c.id}
-              className={`card conn-card selectable${c.id === props.activeId ? ' on' : ''}`}
-              onClick={() => props.onSelect(c.id)}
-            >
-              <div className="conn-card-main">
-                <div className="conn-card-name">
-                  <ConnTypeIcon type={c.type} size={16} />
-                  {c.name}
-                  <span className={`tag ${c.type}`}>{connTypeLabel(c.type)}</span>
-                  {live && <span className="tag ok">{t('conn.liveTag')}</span>}
-                  {!c.passwordSet && c.type !== 'redis' && (
-                    <span className="tag danger">{t('conn.noSecret')}</span>
-                  )}
-                </div>
-                <div className="conn-card-addr mono">{addrLine(c)}</div>
-                {result && (
-                  <div className={`conn-card-test${result.ok ? ' ok' : ' bad'}`}>
-                    {result.message}
-                  </div>
-                )}
-              </div>
-              <div className="conn-card-actions" onClick={(e) => e.stopPropagation()}>
-                <button
-                  type="button"
-                  className="sm"
-                  disabled={testing === c.id}
-                  onClick={() => void runTest(c)}
-                >
-                  {testing === c.id ? t('conn.test.testing') : t('conn.test.run')}
-                </button>
-                <button type="button" className="sm" onClick={() => props.onEdit(c)}>{t('conn.edit')}</button>
-                <button type="button" className="sm danger" onClick={() => props.onDelete(c.id)}>{t('conn.delete')}</button>
-              </div>
-            </div>
-          )
-        })}
+        <button type="button" className="primary" onClick={props.onAdd}>
+          {t('conn.add')}
+        </button>
       </div>
-    </div>
+
+      <div className="data-table-wrap">
+        {props.connections.length === 0 ? (
+          <div className="data-table-empty">{t('conn.empty')}</div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: '22%' }}>{t('conn.col.name')}</th>
+                <th style={{ width: '12%' }}>{t('conn.col.type')}</th>
+                <th style={{ width: '28%' }}>{t('conn.col.addr')}</th>
+                <th style={{ width: '14%' }}>{t('conn.col.status')}</th>
+                <th style={{ width: '24%' }}>{t('conn.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {props.connections.map((c) => {
+                const live = props.connectedIds.has(c.id)
+                const result = testResult[c.id]
+                const selected = c.id === props.activeId
+                return (
+                  <tr
+                    key={c.id}
+                    className={selected ? 'is-selected' : ''}
+                    onClick={() => props.onSelect(c.id)}
+                    style={{ cursor: 'pointer' }}
+                  >
+                    <td>
+                      <div className="cell-main" style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <ConnTypeIcon type={c.type} size={16} />
+                        <span>{c.name}</span>
+                      </div>
+                      {result && (
+                        <div className={`cell-sub${result.ok ? '' : ''}`} style={{ color: result.ok ? 'var(--ok)' : 'var(--danger)' }}>
+                          {result.message}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <span className={`tag ${c.type}`}>{connTypeLabel(c.type)}</span>
+                    </td>
+                    <td>
+                      <div className="cell-muted mono">{addrLine(c)}</div>
+                      {!c.passwordSet && c.type !== 'redis' && (
+                        <div className="cell-sub">
+                          <span className="tag danger">{t('conn.noSecret')}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      {live ? (
+                        <span className="tag ok">{t('conn.liveTag')}</span>
+                      ) : (
+                        <span className="pill" style={{ marginLeft: 0 }}>{t('conn.status.offline')}</span>
+                      )}
+                    </td>
+                    <td>
+                      <div className="cell-actions" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          type="button"
+                          className="sm"
+                          disabled={testing === c.id}
+                          onClick={() => void runTest(c)}
+                        >
+                          {testing === c.id ? t('conn.test.testing') : t('conn.test.run')}
+                        </button>
+                        <button type="button" className="sm" onClick={() => props.onEdit(c)}>
+                          {t('conn.edit')}
+                        </button>
+                        <button type="button" className="sm danger" onClick={() => props.onDelete(c.id)}>
+                          {t('conn.delete')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
+    </>
   )
 }

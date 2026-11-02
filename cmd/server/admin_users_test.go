@@ -41,7 +41,7 @@ func TestAdminBanBlocksLiveSession(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminCookie})
 	rec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("ban status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -67,7 +67,7 @@ func TestAdminCannotBanLastAdmin(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminCookie})
 	rec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400; body %s", rec.Code, rec.Body.String())
 	}
@@ -91,7 +91,7 @@ func TestAdminDemotionTakesEffectOnNextRequest(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminCookie})
 	rec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminUpdateUser))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("demote status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -100,7 +100,7 @@ func TestAdminDemotionTakesEffectOnNextRequest(t *testing.T) {
 	list := httptest.NewRequest(http.MethodGet, "/api/admin/users", nil)
 	list.AddCookie(&http.Cookie{Name: auth.CookieName, Value: aideCookie})
 	listRec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminListUsers))).ServeHTTP(listRec, list)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminListUsers))).ServeHTTP(listRec, list)
 	if listRec.Code != http.StatusForbidden {
 		t.Fatalf("demoted admin list status %d, want 403", listRec.Code)
 	}
@@ -114,7 +114,7 @@ func TestAdminSetPassword(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminCookie})
 	rec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminSetPassword))).ServeHTTP(rec, req)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminSetPassword))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status %d body %s", rec.Code, rec.Body.String())
 	}
@@ -136,7 +136,7 @@ func TestAdminSetPasswordTooLong(t *testing.T) {
 	req.Header.Set("Content-Type", "application/json")
 	req.AddCookie(&http.Cookie{Name: auth.CookieName, Value: adminCookie})
 	rec := httptest.NewRecorder()
-	s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminSetPassword))).ServeHTTP(rec, req)
+	s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminSetPassword))).ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status %d, want 400; body %s", rec.Code, rec.Body.String())
 	}

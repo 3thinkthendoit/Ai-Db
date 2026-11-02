@@ -66,7 +66,9 @@ var apiMethods = []string{
 	"SetActiveSchema", "IsMutatingQuery", "WritesAllowed", "GetLLMConfig",
 	"ListLLMProfiles", "SaveLLMProfile", "DeleteLLMProfile", "ActivateLLMProfile",
 	"SaveLLMSafety", "TestLLMProfile", "SaveLLMConfig", "AgentChat",
-	"ListMutations", "ListQueryAudit", "ApproveMutation", "RejectMutation", "RollbackMutation",
+	"ListMutations", "ListQueryAudit", "SubmitMutation", "ApproveMutation", "ExecuteMutation", "RejectMutation", "RollbackMutation",
+	"ListConnectionCatalog", "ListGrants", "ListPrivilegeRequests", "SubmitPrivilegeRequest",
+	"ApprovePrivilegeRequest", "RejectPrivilegeRequest", "RevokeGrant",
 }
 
 // TestRegisterAPIRoutes verifies all bound endpoints register on the ServeMux
@@ -78,8 +80,8 @@ func TestRegisterAPIRoutes(t *testing.T) {
 	mux := http.NewServeMux()
 	s.registerAPIRoutes(mux) // must not panic
 
-	if len(apiMethods) != 28 {
-		t.Fatalf("expected 28 API methods, got %d", len(apiMethods))
+	if len(apiMethods) != 37 {
+		t.Fatalf("expected 37 API methods, got %d", len(apiMethods))
 	}
 	for _, m := range apiMethods {
 		req := httptest.NewRequest(http.MethodPost, "/api/"+m, strings.NewReader(`{"args":[]}`))

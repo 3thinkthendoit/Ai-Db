@@ -114,9 +114,15 @@ var auditedRPCMethods = map[string]bool{
 	"TestLLMProfile":     true,
 	"ExecuteQuery":       true,
 	"CreateDatabase":     true,
-	"ApproveMutation":    true,
-	"RejectMutation":     true,
-	"RollbackMutation":   true,
+	"SubmitMutation":           true,
+	"ApproveMutation":          true,
+	"ExecuteMutation":          true,
+	"RejectMutation":           true,
+	"RollbackMutation":         true,
+	"SubmitPrivilegeRequest":   true,
+	"ApprovePrivilegeRequest":  true,
+	"RejectPrivilegeRequest":   true,
+	"RevokeGrant":              true,
 }
 
 // rpc records an authenticated service call. detail is already-sanitised text

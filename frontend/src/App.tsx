@@ -13,10 +13,14 @@ import { PrefsView } from './pages/PrefsView'
 import { QueryView } from './pages/QueryView'
 import { AdminView } from './pages/AdminView'
 import { DbaReviewView } from './pages/DbaReviewView'
+import { PermAdminView } from './pages/PermAdminView'
+import { PermApplyView } from './pages/PermApplyView'
 import { ProfileView } from './pages/ProfileView'
 import { SettingsView } from './pages/SettingsView'
+import { SysSettingsView } from './pages/SysSettingsView'
 import { AccountSession, AppMode, ChatMessage, Connection, ObjectNode, emptyConnection } from './types'
 import { useI18n } from './i18n'
+import { canOpenPage } from './lib/navAccess'
 import { ensureDbtoolDefault, getUiEdition, type UiEdition } from './uiEdition'
 import { isDesktop } from './lib/api'
 import {
@@ -158,13 +162,27 @@ function App({ account }: AppProps) {
       return
     }
     if (connections.length === 0) {
-      setMode('connections')
+      const role = account?.role || 'user'
+      if (canOpenPage(role, 'sys')) setMode('sys')
+      else if (canOpenPage(role, 'permApply')) setMode('permApply')
+      else setBanner(t('work.node.empty'))
       return
     }
     setPickConnPurpose('query')
   }
 
   function openWorkPage(page: AppMode) {
+    const role = account?.role || 'user'
+    if (page === 'connections' || page === 'settings') {
+      if (canOpenPage(role, 'sys')) {
+        setMode('sys')
+        return
+      }
+    }
+    if (page !== 'query' && !canOpenPage(role, page) && !isDesktop()) {
+      setBanner(t('nav.forbidden'))
+      return
+    }
     if (page === 'query') {
       requestOpenQuery()
       return
@@ -631,198 +649,190 @@ function App({ account }: AppProps) {
 
         {/* Keep workbench mounted across Settings/Connections/Prefs so Query tabs survive. */}
         <div className={`work-surface${mode === 'work' ? '' : ' is-hidden'}`} aria-hidden={mode !== 'work'}>
-            {/* 对齐 Ai-Shell：无任务的欢迎首页不露顶栏；点进有效任务或 SQL 显示工作栏 */}
-            {(workSurface === 'sql' || !!activeTask) && (
-              <header className="work-bar">
-                <div className="work-bar-left">
-                  <div className="host-menu-wrap work-bar-node-pick" ref={nodeMenuRoot}>
-                    <button
-                      type="button"
-                      className={`tool-pill meta-btn work-node-btn${nodeMenuOpen ? ' open' : ''}${activeConn ? '' : ' muted'}`}
-                      title={
-                        activeConn
-                          ? t('work.node.hint', { name: `${activeConn.name} · ${connTypeLabel(activeConn.type)}` })
-                          : t('work.node.pick')
-                      }
-                      onClick={() => {
-                        setSchemaMenuOpen(false)
-                        setNodeMenuOpen((v) => !v)
-                      }}
-                    >
-                      <span className="work-bar-node-caption">{t('work.node')}</span>
-                      {activeConn ? (
-                        <ConnTypeIcon type={activeConn.type} size={14} />
-                      ) : (
-                        <span className="work-bar-node-ico-placeholder" aria-hidden />
-                      )}
-                      <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
-                      <strong className="work-bar-node-label">
-                        {activeConn
-                          ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
-                          : t('work.node.offline')}
-                      </strong>
-                      <span className="caret-down">{nodeMenuOpen ? '▴' : '▾'}</span>
-                    </button>
-                    {nodeMenuOpen && (
-                      <div className="host-menu" role="listbox">
-                        {connections.length === 0 ? (
-                          <button
-                            type="button"
-                            className="model-menu-item"
-                            onClick={() => {
-                              setNodeMenuOpen(false)
-                              setMode('connections')
-                            }}
-                          >
-                            {t('work.db.empty')}
-                          </button>
-                        ) : (
-                          <>
-                            {connections.map((c) => (
-                              <button
-                                key={c.id}
-                                type="button"
-                                className={`model-menu-item work-node-menu-item${c.id === workConnId ? ' on' : ''}`}
-                                onClick={() => selectWorkNode(c.id)}
-                              >
-                                <ConnTypeIcon type={c.type} size={14} />
-                                <span className={`conn-dot${connectedIds.has(c.id) ? ' on' : ''}`} />
-                                <span className="work-node-menu-text">
-                                  <span className="work-node-menu-name">{c.name}</span>
-                                  <span className="work-node-menu-meta">
-                                    {connTypeLabel(c.type)} · {c.host}:{c.port}
-                                  </span>
-                                </span>
+            {(() => {
+              const workBar = (
+                <header className="work-bar">
+                  <div className="work-bar-left">
+                    <div className="work-bar-field work-bar-node-pick">
+                      <span className="work-bar-field-label">{t('work.node')}</span>
+                      <div className="host-menu-wrap work-bar-field-control" ref={nodeMenuRoot}>
+                        <button
+                          type="button"
+                          className={`tool-pill meta-btn work-node-btn${nodeMenuOpen ? ' open' : ''}${activeConn ? '' : ' muted'}`}
+                          title={
+                            activeConn
+                              ? t('work.node.hint', { name: `${activeConn.name} · ${connTypeLabel(activeConn.type)}` })
+                              : t('work.node.pick')
+                          }
+                          onClick={() => {
+                            setSchemaMenuOpen(false)
+                            setNodeMenuOpen((v) => !v)
+                          }}
+                        >
+                          {activeConn ? (
+                            <ConnTypeIcon type={activeConn.type} size={14} />
+                          ) : (
+                            <span className="work-bar-node-ico-placeholder" aria-hidden />
+                          )}
+                          <span className={`conn-dot${workConnId && connectedIds.has(workConnId) ? ' on' : ''}`} />
+                          <strong className="work-bar-node-label">
+                            {activeConn
+                              ? `${activeConn.name} · ${activeConn.host}:${activeConn.port}`
+                              : t('work.node.offline')}
+                          </strong>
+                          <span className="caret-down">{nodeMenuOpen ? '▴' : '▾'}</span>
+                        </button>
+                        {nodeMenuOpen && (
+                          <div className="host-menu" role="listbox">
+                            {connections.length === 0 ? (
+                              <button type="button" className="model-menu-item" disabled>
+                                {t('work.node.empty')}
                               </button>
-                            ))}
-                            <button
-                              type="button"
-                              className="model-menu-item work-node-menu-manage"
-                              onClick={() => {
-                                setNodeMenuOpen(false)
-                                setMode('connections')
-                              }}
-                            >
-                              {t('work.db.manage')}
-                            </button>
-                          </>
+                            ) : (
+                              connections.map((c) => (
+                                <button
+                                  key={c.id}
+                                  type="button"
+                                  className={`model-menu-item work-node-menu-item${c.id === workConnId ? ' on' : ''}`}
+                                  onClick={() => selectWorkNode(c.id)}
+                                >
+                                  <ConnTypeIcon type={c.type} size={14} />
+                                  <span className={`conn-dot${connectedIds.has(c.id) ? ' on' : ''}`} />
+                                  <span className="work-node-menu-text">
+                                    <span className="work-node-menu-name">{c.name}</span>
+                                    <span className="work-node-menu-meta">
+                                      {connTypeLabel(c.type)} · {c.host}:{c.port}
+                                    </span>
+                                  </span>
+                                </button>
+                              ))
+                            )}
+                          </div>
                         )}
                       </div>
-                    )}
-                  </div>
-                  <div className="host-menu-wrap work-bar-schema-pick" ref={schemaMenuRoot}>
-                    <button
-                      type="button"
-                      className={`tool-pill meta-btn work-schema-btn${schemaMenuOpen ? ' open' : ''}`}
-                      title={activeSchema ? t('work.schema.hint', { name: activeSchema }) : t('work.schema.pick')}
-                      disabled={!workConnId || !connectedIds.has(workConnId)}
-                      onClick={() => {
-                        setNodeMenuOpen(false)
-                        setSchemaMenuOpen((v) => !v)
-                      }}
-                    >
-                      <span className="work-bar-schema-label">{t('work.schema')}</span>
-                      <strong className="work-bar-schema-name">{activeSchema || t('work.schema.pick')}</strong>
-                      <span className="caret-down">{schemaMenuOpen ? '▴' : '▾'}</span>
-                    </button>
-                    {schemaMenuOpen && (
-                      <div className="host-menu" role="listbox">
-                        {schemaOptions.length === 0 ? (
-                          <button type="button" className="model-menu-item" disabled>
-                            {t('work.schema.empty')}
-                          </button>
-                        ) : (
-                          schemaOptions.map((name) => (
-                            <button
-                              key={name}
-                              type="button"
-                              className={`model-menu-item${name === activeSchema ? ' on' : ''}`}
-                              onClick={() => {
-                                setActiveSchema(name)
-                                setSchemaMenuOpen(false)
-                              }}
-                            >
-                              {name}
-                            </button>
-                          ))
+                    </div>
+                    <div className="work-bar-field work-bar-schema-pick">
+                      <span className="work-bar-field-label">{t('work.schema')}</span>
+                      <div className="host-menu-wrap work-bar-field-control" ref={schemaMenuRoot}>
+                        <button
+                          type="button"
+                          className={`tool-pill meta-btn work-schema-btn${schemaMenuOpen ? ' open' : ''}`}
+                          title={activeSchema ? t('work.schema.hint', { name: activeSchema }) : t('work.schema.pick')}
+                          disabled={!workConnId || !connectedIds.has(workConnId)}
+                          onClick={() => {
+                            setNodeMenuOpen(false)
+                            setSchemaMenuOpen((v) => !v)
+                          }}
+                        >
+                          <strong className="work-bar-schema-name">{activeSchema || t('work.schema.pick')}</strong>
+                          <span className="caret-down">{schemaMenuOpen ? '▴' : '▾'}</span>
+                        </button>
+                        {schemaMenuOpen && (
+                          <div className="host-menu" role="listbox">
+                            {schemaOptions.length === 0 ? (
+                              <button type="button" className="model-menu-item" disabled>
+                                {t('work.schema.empty')}
+                              </button>
+                            ) : (
+                              schemaOptions.map((name) => (
+                                <button
+                                  key={name}
+                                  type="button"
+                                  className={`model-menu-item${name === activeSchema ? ' on' : ''}`}
+                                  onClick={() => {
+                                    setActiveSchema(name)
+                                    setSchemaMenuOpen(false)
+                                  }}
+                                >
+                                  {name}
+                                </button>
+                              ))
+                            )}
+                          </div>
                         )}
                       </div>
-                    )}
+                    </div>
                   </div>
-                </div>
-                <div className="work-bar-right">
-                  <div className="seg" role="tablist" aria-label="Agent / Query">
-                    <button
-                      type="button"
-                      className={workSurface === 'agent' ? 'on' : ''}
-                      onClick={() => setWorkSurface('agent')}
-                    >
-                      {t('work.view.agent')}
-                    </button>
-                    <button
-                      type="button"
-                      className={workSurface === 'sql' ? 'on' : ''}
-                      onClick={() => setWorkSurface('sql')}
-                    >
-                      {t('work.view.sql')}
-                    </button>
+                  <div className="work-bar-right">
+                    <div className="seg" role="tablist" aria-label="Agent / Query">
+                      <button
+                        type="button"
+                        className={workSurface === 'agent' ? 'on' : ''}
+                        onClick={() => setWorkSurface('agent')}
+                      >
+                        {t('work.view.agent')}
+                      </button>
+                      <button
+                        type="button"
+                        className={workSurface === 'sql' ? 'on' : ''}
+                        onClick={() => setWorkSurface('sql')}
+                      >
+                        {t('work.view.sql')}
+                      </button>
+                    </div>
                   </div>
-                </div>
-              </header>
-            )}
-            <div className="work-surface-body">
-              {/* Keep both mounted so Agent↔Query switch does not wipe editor/result tabs. */}
-              <div className={`work-surface-panel${workSurface === 'agent' ? '' : ' is-hidden'}`}>
-                <AgentWorkspace
-                  taskId={activeTaskId}
-                  connectionId={workConnId}
-                  connected={!!workConnId && connectedIds.has(workConnId)}
-                  connections={connections}
-                  connectionName={activeConn?.name || ''}
-                  preferredSchema={activeSchema}
-                  history={workspaceHistory}
-                  onSelectConnection={(id) => {
-                    setBanner('')
-                    setActiveConnId(id)
-                    if (activeTask && activeTask.messages.length === 0) {
-                      persistTasks(tasksRef.current.map((task) =>
-                        task.id === activeTask.id ? touchTask(task, { connectionId: id }) : task
-                      ))
-                    }
-                  }}
-                  onEnsureConnected={handleConnect}
-                  onGotoQuery={requestOpenQuery}
-                  onGotoConnections={() => setMode('connections')}
-                  onGotoSettings={() => setMode('settings')}
-                  onEnsureTask={ensureTask}
-                  onGetHistory={getTaskMessages}
-                  onAppendMessages={appendTaskMessages}
-                  onRemoveUserMessage={removeTaskUserMessage}
-                  onHistoryChangeFor={updateTaskHistoryFor}
-                  onRequestPickConnection={(text) => {
-                    setPendingAgentSend(text)
-                    setPickConnPurpose('agent')
-                  }}
-                  pendingSendAfterPick={pendingAgentSend}
-                  onPendingSendConsumed={() => setPendingAgentSend(null)}
-                />
-              </div>
-              <div className={`work-surface-panel${workSurface === 'sql' ? '' : ' is-hidden'}`}>
-                <QueryView
-                  active={mode === 'work' && workSurface === 'sql'}
-                  connectionId={workConnId}
-                  connected={!!workConnId && connectedIds.has(workConnId)}
-                  connType={activeConn?.type || 'mysql'}
-                  objects={objects}
-                  activeSchema={activeSchema}
-                  onRefreshObjects={refreshObjects}
-                  onActiveSchemaChange={setActiveSchema}
-                  onAiAnalyze={runAiAnalyze}
-                />
-              </div>
-            </div>
+                </header>
+              )
+              return (
+                <>
+                  {/* Agent keeps work-bar above chat; Query renders it inside the content pane. */}
+                  {workSurface === 'agent' && !!activeTask && workBar}
+                  <div className="work-surface-body">
+                    <div className={`work-surface-panel${workSurface === 'agent' ? '' : ' is-hidden'}`}>
+                      <AgentWorkspace
+                        taskId={activeTaskId}
+                        connectionId={workConnId}
+                        connected={!!workConnId && connectedIds.has(workConnId)}
+                        connections={connections}
+                        connectionName={activeConn?.name || ''}
+                        preferredSchema={activeSchema}
+                        history={workspaceHistory}
+                        onSelectConnection={(id) => {
+                          setBanner('')
+                          setActiveConnId(id)
+                          if (activeTask && activeTask.messages.length === 0) {
+                            persistTasks(tasksRef.current.map((task) =>
+                              task.id === activeTask.id ? touchTask(task, { connectionId: id }) : task
+                            ))
+                          }
+                        }}
+                        onEnsureConnected={handleConnect}
+                        onGotoQuery={requestOpenQuery}
+                        onGotoConnections={() => openWorkPage('connections')}
+                        onGotoSettings={() => openWorkPage('settings')}
+                        onEnsureTask={ensureTask}
+                        onGetHistory={getTaskMessages}
+                        onAppendMessages={appendTaskMessages}
+                        onRemoveUserMessage={removeTaskUserMessage}
+                        onHistoryChangeFor={updateTaskHistoryFor}
+                        onRequestPickConnection={(text) => {
+                          setPendingAgentSend(text)
+                          setPickConnPurpose('agent')
+                        }}
+                        pendingSendAfterPick={pendingAgentSend}
+                        onPendingSendConsumed={() => setPendingAgentSend(null)}
+                      />
+                    </div>
+                    <div className={`work-surface-panel${workSurface === 'sql' ? '' : ' is-hidden'}`}>
+                      <QueryView
+                        active={mode === 'work' && workSurface === 'sql'}
+                        connectionId={workConnId}
+                        connected={!!workConnId && connectedIds.has(workConnId)}
+                        connType={activeConn?.type || 'mysql'}
+                        objects={objects}
+                        activeSchema={activeSchema}
+                        onRefreshObjects={refreshObjects}
+                        onActiveSchemaChange={setActiveSchema}
+                        onAiAnalyze={runAiAnalyze}
+                        toolbar={workSurface === 'sql' ? workBar : undefined}
+                      />
+                    </div>
+                  </div>
+                </>
+              )
+            })()}
           </div>
-        {mode === 'connections' && (
+        {mode === 'connections' && account?.role === 'admin' && (
           <ConnectionsView
             connections={connections}
             connectedIds={connectedIds}
@@ -833,15 +843,28 @@ function App({ account }: AppProps) {
             onAdd={() => setEditing(emptyConnection())}
           />
         )}
+        {mode === 'sys' && account?.role === 'admin' && (
+          <SysSettingsView
+            connections={connections}
+            connectedIds={connectedIds}
+            activeId={activeConnId}
+            onSelect={setActiveConnId}
+            onEdit={(c) => setEditing(c)}
+            onDelete={handleDeleteConn}
+            onAdd={() => setEditing(emptyConnection())}
+          />
+        )}
         {mode === 'prefs' && <PrefsView />}
-        {mode === 'settings' && <SettingsView />}
+        {mode === 'settings' && account?.role === 'admin' && <SettingsView />}
         {mode === 'profile' && account && (
           <ProfileView onUpdated={account.onProfileUpdated} />
         )}
-        {mode === 'admin' && account?.role === 'admin' && (
+        {mode === 'admin' && (account?.role === 'admin' || account?.role === 'dba') && (
           <AdminView selfUsername={account.username} />
         )}
-        {mode === 'dba' && account?.role === 'dba' && <DbaReviewView />}
+        {mode === 'perms' && (account?.role === 'admin' || account?.role === 'dba') && <PermAdminView />}
+        {mode === 'permApply' && !!account && <PermApplyView />}
+        {mode === 'dba' && !!account && <DbaReviewView viewerRole={account.role} />}
       </main>
 
       {pickConnPurpose && (
@@ -857,7 +880,7 @@ function App({ account }: AppProps) {
           onManage={() => {
             setPickConnPurpose(null)
             setPendingAgentSend(null)
-            setMode('connections')
+            openWorkPage(account?.role === 'admin' ? 'sys' : 'permApply')
           }}
           onPick={(id) => {
             const purpose = pickConnPurpose

@@ -87,7 +87,7 @@ func (s *stubUsers) UpdatePassword(_ context.Context, id, passwordHash string) (
 	return 0, auth.ErrNoUser
 }
 
-func (s *stubUsers) UpdateAdmin(_ context.Context, id, role, displayName string, banned bool) error {
+func (s *stubUsers) UpdateAdmin(_ context.Context, id, role, displayName, email, phone string, banned bool) error {
 	for name, u := range s.byName {
 		if u.ID == id {
 			losingAdmin := u.Role == auth.RoleAdmin && !u.Banned && (role != auth.RoleAdmin || banned)
@@ -104,7 +104,20 @@ func (s *stubUsers) UpdateAdmin(_ context.Context, id, role, displayName string,
 			}
 			u.Role = role
 			u.DisplayName = displayName
+			u.Email = email
+			u.Phone = phone
 			u.Banned = banned
+			s.byName[name] = u
+			return nil
+		}
+	}
+	return auth.ErrNoUser
+}
+
+func (s *stubUsers) TouchLastLogin(_ context.Context, id string) error {
+	for name, u := range s.byName {
+		if u.ID == id {
+			u.LastLoginAt = time.Now().UTC()
 			s.byName[name] = u
 			return nil
 		}

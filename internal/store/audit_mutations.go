@@ -22,26 +22,31 @@ type QueryAuditRow struct {
 	MutationID   string
 }
 
-// MutationRow is a pending/executed mutation request.
+// MutationRow is a SQL change ticket (review → execute → optional rollback).
 type MutationRow struct {
-	ID            string
-	CreatedAt     time.Time
-	UpdatedAt     time.Time
-	OwnerID       string
-	OwnerName     string
-	ConnectionID  string
-	ConnType      string
-	ActiveSchema  string
-	SQLText       string
-	StmtClass     string
-	Status        string
-	Rollbackable  bool
-	BeforeImage   string
-	ReviewerID    string
-	ReviewerName  string
-	ReviewNote    string
-	ExecutedAt    *time.Time
-	RolledBackAt  *time.Time
+	ID           string
+	CreatedAt    time.Time
+	UpdatedAt    time.Time
+	OwnerID      string
+	OwnerName    string
+	ConnectionID string
+	ConnType     string
+	ActiveSchema string
+	Title        string
+	Remark       string
+	DemandURL    string
+	SQLText      string
+	StmtClass    string
+	LintResult   string
+	Status       string
+	Rollbackable bool
+	BeforeImage  string
+	ReviewerID   string
+	ReviewerName string
+	ReviewNote   string
+	ApprovedAt   *time.Time
+	ExecutedAt   *time.Time
+	RolledBackAt *time.Time
 }
 
 // InsertQueryAudit appends one audit row.
@@ -109,20 +114,23 @@ func (s *MySQLStore) InsertMutation(ctx context.Context, row MutationRow) error 
 	}
 	_, err := s.db.ExecContext(ctx, `
 INSERT INTO mutation_requests
-  (id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema, sql_text, stmt_class,
-   status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, executed_at, rolled_back_at)
-VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
+  (id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema,
+   title, remark, demand_url, sql_text, stmt_class, lint_result,
+   status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, approved_at, executed_at, rolled_back_at)
+VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)`,
 		row.ID, row.CreatedAt, row.UpdatedAt, row.OwnerID, row.OwnerName, row.ConnectionID, row.ConnType, row.ActiveSchema,
-		row.SQLText, row.StmtClass, row.Status, boolToTiny(row.Rollbackable), nullStr(row.BeforeImage),
-		row.ReviewerID, row.ReviewerName, row.ReviewNote, row.ExecutedAt, row.RolledBackAt)
+		row.Title, row.Remark, row.DemandURL, row.SQLText, row.StmtClass, row.LintResult,
+		row.Status, boolToTiny(row.Rollbackable), nullStr(row.BeforeImage),
+		row.ReviewerID, row.ReviewerName, row.ReviewNote, row.ApprovedAt, row.ExecutedAt, row.RolledBackAt)
 	return err
 }
 
 // GetMutation loads one mutation by id.
 func (s *MySQLStore) GetMutation(ctx context.Context, id string) (*MutationRow, error) {
 	row := s.db.QueryRowContext(ctx, `
-SELECT id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema, sql_text, stmt_class,
-       status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, executed_at, rolled_back_at
+SELECT id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema,
+       title, remark, demand_url, sql_text, stmt_class, lint_result,
+       status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, approved_at, executed_at, rolled_back_at
 FROM mutation_requests WHERE id = ?`, id)
 	return scanMutation(row)
 }
@@ -133,8 +141,9 @@ func (s *MySQLStore) ListMutations(ctx context.Context, ownerID, status string, 
 		limit = 100
 	}
 	q := `
-SELECT id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema, sql_text, stmt_class,
-       status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, executed_at, rolled_back_at
+SELECT id, created_at, updated_at, owner_id, owner_name, connection_id, conn_type, active_schema,
+       title, remark, demand_url, sql_text, stmt_class, lint_result,
+       status, rollbackable, before_image, reviewer_id, reviewer_name, review_note, approved_at, executed_at, rolled_back_at
 FROM mutation_requests WHERE 1=1`
 	args := []any{}
 	if ownerID != "" {
@@ -168,11 +177,13 @@ func (s *MySQLStore) UpdateMutation(ctx context.Context, row MutationRow) error 
 	row.UpdatedAt = time.Now().UTC()
 	_, err := s.db.ExecContext(ctx, `
 UPDATE mutation_requests SET
-  updated_at=?, status=?, rollbackable=?, before_image=?,
-  reviewer_id=?, reviewer_name=?, review_note=?, executed_at=?, rolled_back_at=?
+  updated_at=?, title=?, remark=?, demand_url=?, lint_result=?,
+  status=?, rollbackable=?, before_image=?,
+  reviewer_id=?, reviewer_name=?, review_note=?, approved_at=?, executed_at=?, rolled_back_at=?
 WHERE id=?`,
-		row.UpdatedAt, row.Status, boolToTiny(row.Rollbackable), nullStr(row.BeforeImage),
-		row.ReviewerID, row.ReviewerName, row.ReviewNote, row.ExecutedAt, row.RolledBackAt, row.ID)
+		row.UpdatedAt, row.Title, row.Remark, row.DemandURL, row.LintResult,
+		row.Status, boolToTiny(row.Rollbackable), nullStr(row.BeforeImage),
+		row.ReviewerID, row.ReviewerName, row.ReviewNote, row.ApprovedAt, row.ExecutedAt, row.RolledBackAt, row.ID)
 	return err
 }
 
@@ -201,15 +212,20 @@ func scanMutation(row scannable) (*MutationRow, error) {
 	var m MutationRow
 	var rb int
 	var before sql.NullString
-	var execAt, rbAt sql.NullTime
+	var approvedAt, execAt, rbAt sql.NullTime
 	if err := row.Scan(&m.ID, &m.CreatedAt, &m.UpdatedAt, &m.OwnerID, &m.OwnerName, &m.ConnectionID, &m.ConnType,
-		&m.ActiveSchema, &m.SQLText, &m.StmtClass, &m.Status, &rb, &before, &m.ReviewerID, &m.ReviewerName, &m.ReviewNote,
-		&execAt, &rbAt); err != nil {
+		&m.ActiveSchema, &m.Title, &m.Remark, &m.DemandURL, &m.SQLText, &m.StmtClass, &m.LintResult,
+		&m.Status, &rb, &before, &m.ReviewerID, &m.ReviewerName, &m.ReviewNote,
+		&approvedAt, &execAt, &rbAt); err != nil {
 		return nil, err
 	}
 	m.Rollbackable = rb != 0
 	if before.Valid {
 		m.BeforeImage = before.String
+	}
+	if approvedAt.Valid {
+		t := approvedAt.Time
+		m.ApprovedAt = &t
 	}
 	if execAt.Valid {
 		t := execAt.Time

@@ -118,13 +118,22 @@ export interface MutationView {
   ownerId: string
   ownerName: string
   connectionId: string
+  connectionName: string
+  connectionHost: string
+  connectionPort: number
   connType: string
+  activeSchema: string
+  title: string
+  remark: string
+  demandUrl: string
   sqlText: string
   stmtClass: string
+  lintResult: string
   status: string
   rollbackable: boolean
   reviewerName: string
   reviewNote: string
+  approvedAt?: string
   executedAt?: string
   rolledBackAt?: string
 }
@@ -143,17 +152,32 @@ export interface QueryAuditView {
   mutationId: string
 }
 
-export const ListMutations = (status = '', limit = 100): Promise<MutationView[]> => {
+export const ListMutations = (status = '', limit = 100, mineOnly = false): Promise<MutationView[]> => {
   if (isDesktop()) return Promise.resolve([])
-  return call('ListMutations', status, limit)
+  return call('ListMutations', status, limit, mineOnly)
 }
 export const ListQueryAudit = (limit = 100): Promise<QueryAuditView[]> => {
   if (isDesktop()) return Promise.resolve([])
   return call('ListQueryAudit', limit)
 }
-export const ApproveMutation = (id: string, note = ''): Promise<db.QueryResult> => {
+/** Submit a change ticket. title + content (stored as remark) are required server-side. */
+export const SubmitMutation = (
+  connectionId: string,
+  sql: string,
+  title: string,
+  content: string,
+  demandUrl = ''
+): Promise<db.QueryResult> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('SubmitMutation', connectionId, sql, title, content, demandUrl)
+}
+export const ApproveMutation = (id: string, note = ''): Promise<void> => {
   if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
   return call('ApproveMutation', id, note)
+}
+export const ExecuteMutation = (id: string, note = ''): Promise<db.QueryResult> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('ExecuteMutation', id, note)
 }
 export const RejectMutation = (id: string, note = ''): Promise<void> => {
   if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
@@ -162,6 +186,69 @@ export const RejectMutation = (id: string, note = ''): Promise<void> => {
 export const RollbackMutation = (id: string, note = ''): Promise<db.QueryResult> => {
   if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
   return call('RollbackMutation', id, note)
+}
+
+export interface ConnectionCatalogItem {
+  id: string
+  name: string
+  type: string
+  host: string
+  port: number
+}
+
+export interface GrantView {
+  id: string
+  createdAt: string
+  granteeId: string
+  granteeName: string
+  connectionId: string
+  databaseName: string
+  tableName: string
+  grantedByName: string
+}
+
+export interface PrivilegeRequestView {
+  id: string
+  createdAt: string
+  updatedAt: string
+  applicantId: string
+  applicantName: string
+  connectionId: string
+  databaseName: string
+  tableName: string
+  remark: string
+  status: string
+  reviewerName: string
+  reviewNote: string
+}
+
+export const ListConnectionCatalog = (): Promise<ConnectionCatalogItem[]> => {
+  if (isDesktop()) return Promise.resolve([])
+  return call('ListConnectionCatalog')
+}
+export const ListGrants = (limit = 200): Promise<GrantView[]> => {
+  if (isDesktop()) return Promise.resolve([])
+  return call('ListGrants', limit)
+}
+export const ListPrivilegeRequests = (status = '', limit = 200, mineOnly = false): Promise<PrivilegeRequestView[]> => {
+  if (isDesktop()) return Promise.resolve([])
+  return call('ListPrivilegeRequests', status, limit, mineOnly)
+}
+export const SubmitPrivilegeRequest = (connectionId: string, database: string, tables: string, remark = ''): Promise<void> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('SubmitPrivilegeRequest', connectionId, database, tables, remark)
+}
+export const ApprovePrivilegeRequest = (id: string, note = ''): Promise<void> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('ApprovePrivilegeRequest', id, note)
+}
+export const RejectPrivilegeRequest = (id: string, note = ''): Promise<void> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('RejectPrivilegeRequest', id, note)
+}
+export const RevokeGrant = (id: string): Promise<void> => {
+  if (isDesktop()) return Promise.reject(new Error('not available on desktop'))
+  return call('RevokeGrant', id)
 }
 
 /**
@@ -252,7 +339,11 @@ export interface AdminUser {
   username: string
   role: string
   displayName: string
+  email: string
+  phone: string
   banned: boolean
+  createdAt: string
+  lastLoginAt?: string
 }
 
 export interface AdminCreateResult {
@@ -261,6 +352,8 @@ export interface AdminCreateResult {
   id?: string
   username?: string
   role?: string
+  email?: string
+  phone?: string
 }
 
 export interface AdminMutateResult {
@@ -270,6 +363,8 @@ export interface AdminMutateResult {
   username?: string
   role?: string
   displayName?: string
+  email?: string
+  phone?: string
   banned?: boolean
 }
 
@@ -297,21 +392,28 @@ async function readAdminJSON<T extends { ok?: boolean; error?: string }>(
 export async function adminCreateUser(
   username: string,
   password: string,
-  role: string
+  role: string,
+  contact?: { email?: string; phone?: string }
 ): Promise<AdminCreateResult> {
   const res = await fetch('/api/admin/users', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
-    body: JSON.stringify({ username, password, role }),
+    body: JSON.stringify({
+      username,
+      password,
+      role,
+      email: contact?.email ?? '',
+      phone: contact?.phone ?? '',
+    }),
   })
   return readAdminJSON<AdminCreateResult>(res)
 }
 
-/** Patch role / display name / ban flag (admin-only). */
+/** Patch role / display name / contact / ban flag (admin-only). */
 export async function adminUpdateUser(
   id: string,
-  patch: { role?: string; displayName?: string; banned?: boolean }
+  patch: { role?: string; displayName?: string; email?: string; phone?: string; banned?: boolean }
 ): Promise<AdminMutateResult> {
   const res = await fetch(`/api/admin/users/${encodeURIComponent(id)}`, {
     method: 'PATCH',

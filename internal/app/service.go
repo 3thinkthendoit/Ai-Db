@@ -28,7 +28,8 @@ import (
 // desktop build only ever uses the "local" key.
 type Service struct {
 	store     store.ConfigStore
-	mutations store.MutationStore // nil on desktop; server MySQLStore
+	mutations store.MutationStore  // nil on desktop; server MySQLStore
+	grants    store.QueryGrantStore // nil on desktop; same MySQLStore when available
 	mgr       *db.Manager
 	agent     *agent.Service
 
@@ -57,9 +58,13 @@ type Hardening struct {
 }
 
 // SetMutationStore installs the durable audit/mutation repository (server only).
+// When ms also implements QueryGrantStore, table-level grants are enabled.
 func (s *Service) SetMutationStore(ms store.MutationStore) {
 	s.mu.Lock()
 	s.mutations = ms
+	if gs, ok := ms.(store.QueryGrantStore); ok {
+		s.grants = gs
+	}
 	s.mu.Unlock()
 }
 
@@ -229,16 +234,57 @@ func (s *Service) PrimeDefaults(p Principal) {
 
 // —— connections ——
 
-// ListConnections returns the caller's saved connections without passwords.
+// ListConnections returns connections the caller may use (own, or granted catalog).
 func (s *Service) ListConnections(ctx context.Context, p Principal) ([]config.Connection, error) {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 	cfg, err := s.ensureCfgLocked(ctx, p)
+	gs := s.grants
+	s.mu.Unlock()
 	if err != nil {
 		return nil, err
 	}
+	seen := map[string]bool{}
 	out := make([]config.Connection, 0, len(cfg.Connections))
 	for _, c := range cfg.Connections {
+		seen[c.ID] = true
+		out = append(out, config.PublicConnection(c))
+	}
+	if gs == nil {
+		return out, nil
+	}
+	// Admin/DBA also see the full catalog so they can operate shared instances.
+	if roleBypassesGrants(p.Role) {
+		metas, err := gs.ListAllConnections(ctx, 200)
+		if err != nil {
+			return out, nil
+		}
+		for _, m := range metas {
+			if seen[m.ID] {
+				continue
+			}
+			seen[m.ID] = true
+			c := m.ToConfigConnection()
+			c.Password = ""
+			c.PasswordSet = false
+			out = append(out, config.PublicConnection(c))
+		}
+		return out, nil
+	}
+	ids, err := gs.ListGrantedConnectionIDs(ctx, p.UserID)
+	if err != nil {
+		return out, nil
+	}
+	for _, id := range ids {
+		if seen[id] {
+			continue
+		}
+		meta, err := gs.GetConnectionByID(ctx, id)
+		if err != nil {
+			continue
+		}
+		seen[id] = true
+		c := meta.ToConfigConnection()
+		c.Password = ""
 		out = append(out, config.PublicConnection(c))
 	}
 	return out, nil
@@ -249,6 +295,10 @@ func (s *Service) ListConnections(ctx context.Context, p Principal) ([]config.Co
 func (s *Service) UpsertConnection(ctx context.Context, p Principal, c config.Connection) (config.Connection, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Shared catalog (web): only admin maintains connections; others consume via grants.
+	if s.grants != nil && p.Role != "admin" {
+		return c, fmt.Errorf("only admin can manage connections")
+	}
 	cfg, err := s.ensureCfgLocked(ctx, p)
 	if err != nil {
 		return c, err
@@ -311,6 +361,10 @@ func (s *Service) UpsertConnection(ctx context.Context, p Principal, c config.Co
 // by Connect/ExecuteQuery.
 func (s *Service) DeleteConnection(ctx context.Context, p Principal, id string) error {
 	s.mu.Lock()
+	if s.grants != nil && p.Role != "admin" {
+		s.mu.Unlock()
+		return fmt.Errorf("only admin can manage connections")
+	}
 	cfg, err := s.ensureCfgLocked(ctx, p)
 	if err != nil {
 		s.mu.Unlock()
@@ -369,7 +423,7 @@ func (s *Service) TestConnection(ctx context.Context, p Principal, c config.Conn
 // Connect opens a live driver for one of the caller's saved connections.
 func (s *Service) Connect(ctx context.Context, p Principal, id string) error {
 	s.mu.Lock()
-	c, err := s.findConnLocked(ctx, p, id)
+	c, err := s.resolveConnLocked(ctx, p, id)
 	pol := s.hardening.Egress
 	s.mu.Unlock()
 	if err != nil {
@@ -387,7 +441,7 @@ func (s *Service) Connect(ctx context.Context, p Principal, id string) error {
 // touches the manager.
 func (s *Service) Disconnect(ctx context.Context, p Principal, id string) error {
 	s.mu.Lock()
-	_, err := s.findConnLocked(ctx, p, id)
+	_, err := s.resolveConnLocked(ctx, p, id)
 	s.mu.Unlock()
 	if err != nil {
 		return err
@@ -401,7 +455,7 @@ func (s *Service) Disconnect(ctx context.Context, p Principal, id string) error 
 // connectionID is verified before touching the global manager.
 func (s *Service) ListObjects(ctx context.Context, p Principal, connectionID string) ([]db.ObjectNode, error) {
 	s.mu.Lock()
-	_, err := s.findConnLocked(ctx, p, connectionID)
+	_, err := s.resolveConnLocked(ctx, p, connectionID)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -411,14 +465,18 @@ func (s *Service) ListObjects(ctx context.Context, p Principal, connectionID str
 		return nil, err
 	}
 	defer release()
-	return drv.ListObjects(ctx)
+	nodes, err := drv.ListObjects(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterObjectsByGrants(ctx, p, connectionID, nodes)
 }
 
 // ExpandObject loads children for an object-tree path. Ownership of connectionID
 // is verified before touching the global manager.
 func (s *Service) ExpandObject(ctx context.Context, p Principal, connectionID string, path []string) ([]db.ObjectNode, error) {
 	s.mu.Lock()
-	_, err := s.findConnLocked(ctx, p, connectionID)
+	_, err := s.resolveConnLocked(ctx, p, connectionID)
 	s.mu.Unlock()
 	if err != nil {
 		return nil, err
@@ -428,7 +486,11 @@ func (s *Service) ExpandObject(ctx context.Context, p Principal, connectionID st
 		return nil, err
 	}
 	defer release()
-	return drv.ExpandObject(ctx, path)
+	nodes, err := drv.ExpandObject(ctx, path)
+	if err != nil {
+		return nil, err
+	}
+	return s.filterExpandByGrants(ctx, p, connectionID, path, nodes)
 }
 
 // ExecuteQuery runs SQL or a Redis command under the caller's safety knobs.
@@ -439,7 +501,7 @@ func (s *Service) ExpandObject(ctx context.Context, p Principal, connectionID st
 // submitted as pending mutation requests for DBA approval instead of running.
 func (s *Service) ExecuteQuery(ctx context.Context, p Principal, connectionID, query string) (*db.QueryResult, error) {
 	s.mu.Lock()
-	c, err := s.findConnLocked(ctx, p, connectionID)
+	c, err := s.resolveConnLocked(ctx, p, connectionID)
 	if err != nil {
 		s.mu.Unlock()
 		return nil, err
@@ -453,11 +515,20 @@ func (s *Service) ExecuteQuery(ctx context.Context, p Principal, connectionID, q
 	timeout := s.hardening.QueryTimeout
 	gate := s.hardening.MutationGate && s.mutations != nil
 	connType := c.Type
+	activeSchema := s.activeSchemas[connectionID]
 	s.mu.Unlock()
 	if timeout > 0 {
 		var cancel context.CancelFunc
 		ctx, cancel = context.WithTimeout(ctx, timeout)
 		defer cancel()
+	}
+	// Ordinary users need a schema-level grant before interactive queries.
+	if err := s.requireSchemaGrant(ctx, p, connectionID, activeSchema); err != nil {
+		class := db.ClassifySQL(connType, query)
+		if !db.IsMutatingClass(class) {
+			return nil, err
+		}
+		// Writes still go through mutation tickets; grant check is for reads.
 	}
 	if gate {
 		return s.executeQueryGated(ctx, p, connectionID, query, cfg, connType)
@@ -575,13 +646,16 @@ func (s *Service) CreateDatabase(ctx context.Context, p Principal, connectionID 
 // connectionID is verified before touching the global manager.
 func (s *Service) SetActiveSchema(ctx context.Context, p Principal, connectionID, schema string) error {
 	s.mu.Lock()
-	_, err := s.findConnLocked(ctx, p, connectionID)
+	_, err := s.resolveConnLocked(ctx, p, connectionID)
 	if err != nil {
 		s.mu.Unlock()
 		return err
 	}
 	s.activeSchemas[connectionID] = strings.TrimSpace(schema)
 	s.mu.Unlock()
+	if err := s.requireSchemaGrant(ctx, p, connectionID, schema); err != nil {
+		return err
+	}
 	return s.mgr.SetActiveSchema(connectionID, schema)
 }
 
@@ -589,7 +663,7 @@ func (s *Service) SetActiveSchema(ctx context.Context, p Principal, connectionID
 // An unknown connection yields false (matching the desktop behaviour).
 func (s *Service) IsMutatingQuery(ctx context.Context, p Principal, connectionID, query string) (bool, error) {
 	s.mu.Lock()
-	c, err := s.findConnLocked(ctx, p, connectionID)
+	c, err := s.resolveConnLocked(ctx, p, connectionID)
 	s.mu.Unlock()
 	if err != nil {
 		return false, nil

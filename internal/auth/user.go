@@ -22,8 +22,12 @@ type User struct {
 	Role         string
 	DisplayName  string
 	Avatar       string // data-URL or empty; never returned from List admin views unless needed
+	Email        string
+	Phone        string
 	Banned       bool
 	TokenVersion int // bumped on password change; must match session cookie
+	CreatedAt    time.Time
+	LastLoginAt  time.Time // zero when the user has never logged in
 }
 
 // AuthAccount is the lean row Gate/session checks need (no avatar / password hash).
@@ -44,7 +48,8 @@ type UserRepository interface {
 	Create(ctx context.Context, u User) error
 	UpdateProfile(ctx context.Context, id, displayName, avatar string) error
 	UpdatePassword(ctx context.Context, id, passwordHash string) (tokenVersion int, err error)
-	UpdateAdmin(ctx context.Context, id, role, displayName string, banned bool) error
+	UpdateAdmin(ctx context.Context, id, role, displayName, email, phone string, banned bool) error
+	TouchLastLogin(ctx context.Context, id string) error
 	CountAdmins(ctx context.Context) (int, error)
 	Count(ctx context.Context) (int, error)
 	List(ctx context.Context) ([]User, error)
@@ -62,7 +67,8 @@ func scanUser(row interface {
 	var u User
 	var avatar sql.NullString
 	var banned int
-	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &avatar, &banned, &u.TokenVersion)
+	var lastLogin sql.NullTime
+	err := row.Scan(&u.ID, &u.Username, &u.PasswordHash, &u.Role, &u.DisplayName, &avatar, &u.Email, &u.Phone, &banned, &u.TokenVersion, &u.CreatedAt, &lastLogin)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNoUser
 	}
@@ -73,6 +79,9 @@ func scanUser(row interface {
 		u.Avatar = avatar.String
 	}
 	u.Banned = banned != 0
+	if lastLogin.Valid {
+		u.LastLoginAt = lastLogin.Time
+	}
 	return &u, nil
 }
 
@@ -92,7 +101,7 @@ func scanAuthAccount(row interface {
 	return &a, nil
 }
 
-const userSelectCols = "id, username, password_hash, role, display_name, avatar, banned, token_version"
+const userSelectCols = "id, username, password_hash, role, display_name, avatar, email, phone, banned, token_version, created_at, last_login_at"
 const authSelectCols = "id, username, role, banned, token_version"
 
 // ByUsername loads a user by their unique username.
@@ -121,8 +130,8 @@ func (r *MySQLUsers) Create(ctx context.Context, u User) error {
 		banned = 1
 	}
 	_, err := r.db.ExecContext(ctx,
-		"INSERT INTO users (id, username, password_hash, role, display_name, avatar, banned, token_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?)",
-		u.ID, u.Username, u.PasswordHash, u.Role, u.DisplayName, nullIfEmpty(u.Avatar), banned, u.TokenVersion, now, now)
+		"INSERT INTO users (id, username, password_hash, role, display_name, avatar, email, phone, banned, token_version, created_at, updated_at) VALUES (?,?,?,?,?,?,?,?,?,?,?,?)",
+		u.ID, u.Username, u.PasswordHash, u.Role, u.DisplayName, nullIfEmpty(u.Avatar), u.Email, u.Phone, banned, u.TokenVersion, now, now)
 	return err
 }
 
@@ -156,10 +165,11 @@ func (r *MySQLUsers) UpdatePassword(ctx context.Context, id, passwordHash string
 	return ver, err
 }
 
-// UpdateAdmin sets role, display name and ban flag. When the change would remove
-// the last active admin, it returns ErrLastAdmin. The check runs under a
-// transaction with FOR UPDATE so concurrent demotions cannot race to zero admins.
-func (r *MySQLUsers) UpdateAdmin(ctx context.Context, id, role, displayName string, banned bool) error {
+// UpdateAdmin sets role, display name, contact fields and ban flag. When the
+// change would remove the last active admin, it returns ErrLastAdmin. The check
+// runs under a transaction with FOR UPDATE so concurrent demotions cannot race
+// to zero admins.
+func (r *MySQLUsers) UpdateAdmin(ctx context.Context, id, role, displayName, email, phone string, banned bool) error {
 	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return err
@@ -207,8 +217,8 @@ func (r *MySQLUsers) UpdateAdmin(ctx context.Context, id, role, displayName stri
 		flag = 1
 	}
 	res, err := tx.ExecContext(ctx,
-		"UPDATE users SET role = ?, display_name = ?, banned = ?, updated_at = ? WHERE id = ?",
-		role, displayName, flag, time.Now().UTC(), id)
+		"UPDATE users SET role = ?, display_name = ?, email = ?, phone = ?, banned = ?, updated_at = ? WHERE id = ?",
+		role, displayName, email, phone, flag, time.Now().UTC(), id)
 	if err != nil {
 		return err
 	}
@@ -235,6 +245,14 @@ func (r *MySQLUsers) ensureExists(ctx context.Context, id string) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return ErrNoUser
 	}
+	return err
+}
+
+// TouchLastLogin stamps last_login_at to now (best-effort after successful login).
+func (r *MySQLUsers) TouchLastLogin(ctx context.Context, id string) error {
+	_, err := r.db.ExecContext(ctx,
+		"UPDATE users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+		time.Now().UTC(), time.Now().UTC(), id)
 	return err
 }
 

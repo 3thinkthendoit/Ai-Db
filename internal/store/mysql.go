@@ -54,25 +54,32 @@ func (s *MySQLStore) Migrate(ctx context.Context) error {
 	if err := s.ensureUserProfileColumns(ctx); err != nil {
 		return err
 	}
-	if err := s.ensureMutationActiveSchema(ctx); err != nil {
+	if err := s.ensureMutationTicketColumns(ctx); err != nil {
 		return err
 	}
 	return nil
 }
 
-// ensureMutationActiveSchema backfills active_schema on older mutation_requests tables.
-func (s *MySQLStore) ensureMutationActiveSchema(ctx context.Context) error {
-	_, err := s.db.ExecContext(ctx,
-		"ALTER TABLE mutation_requests ADD COLUMN active_schema VARCHAR(128) NOT NULL DEFAULT ''")
-	if err != nil {
-		if isDuplicateColumn(err) {
-			return nil
+// ensureMutationTicketColumns backfills ticket fields on older mutation_requests tables.
+func (s *MySQLStore) ensureMutationTicketColumns(ctx context.Context) error {
+	alters := []string{
+		"ALTER TABLE mutation_requests ADD COLUMN active_schema VARCHAR(128) NOT NULL DEFAULT ''",
+		"ALTER TABLE mutation_requests ADD COLUMN title VARCHAR(128) NOT NULL DEFAULT ''",
+		"ALTER TABLE mutation_requests ADD COLUMN remark VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE mutation_requests ADD COLUMN demand_url VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE mutation_requests ADD COLUMN lint_result VARCHAR(512) NOT NULL DEFAULT ''",
+		"ALTER TABLE mutation_requests ADD COLUMN approved_at DATETIME(3) NULL",
+	}
+	for _, stmt := range alters {
+		if _, err := s.db.ExecContext(ctx, stmt); err != nil {
+			if isDuplicateColumn(err) {
+				continue
+			}
+			if strings.Contains(err.Error(), "doesn't exist") {
+				return nil
+			}
+			return fmt.Errorf("migrate mutation ticket columns: %w", err)
 		}
-		// Table may not exist yet on brand-new migrate order; ignore missing table.
-		if strings.Contains(err.Error(), "doesn't exist") {
-			return nil
-		}
-		return fmt.Errorf("migrate mutation active_schema: %w", err)
 	}
 	return nil
 }
@@ -85,6 +92,9 @@ func (s *MySQLStore) ensureUserProfileColumns(ctx context.Context) error {
 		"ALTER TABLE users ADD COLUMN avatar MEDIUMTEXT NULL",
 		"ALTER TABLE users ADD COLUMN banned TINYINT(1) NOT NULL DEFAULT 0",
 		"ALTER TABLE users ADD COLUMN token_version INT NOT NULL DEFAULT 0",
+		"ALTER TABLE users ADD COLUMN last_login_at DATETIME NULL",
+		"ALTER TABLE users ADD COLUMN email VARCHAR(128) NOT NULL DEFAULT ''",
+		"ALTER TABLE users ADD COLUMN phone VARCHAR(32) NOT NULL DEFAULT ''",
 	}
 	for _, stmt := range alters {
 		if _, err := s.db.ExecContext(ctx, stmt); err != nil {

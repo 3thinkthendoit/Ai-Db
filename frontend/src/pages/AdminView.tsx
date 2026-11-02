@@ -17,6 +17,8 @@ type EditForm = {
   id: string
   username: string
   displayName: string
+  email: string
+  phone: string
   role: string
 }
 
@@ -30,19 +32,30 @@ type PasswordForm = {
 type CreateForm = {
   username: string
   password: string
+  email: string
+  phone: string
   role: string
 }
 
-const emptyCreate = (): CreateForm => ({ username: '', password: '', role: 'user' })
+const emptyCreate = (): CreateForm => ({
+  username: '',
+  password: '',
+  email: '',
+  phone: '',
+  role: 'user',
+})
 
 interface Props {
   /** Current session username — used to disable self-ban in the UI. */
   selfUsername: string
 }
 
+type Tab = 'users' | 'roles'
+
 export function AdminView({ selfUsername }: Props) {
   const { t } = useI18n()
   const { showTip, tipNode } = useTipToast()
+  const [tab, setTab] = useState<Tab>('users')
   const [users, setUsers] = useState<AdminUser[]>([])
   const [busy, setBusy] = useState(false)
   const [creating, setCreating] = useState(false)
@@ -73,6 +86,8 @@ export function AdminView({ selfUsername }: Props) {
       id: u.id,
       username: u.username,
       displayName: u.displayName || '',
+      email: u.email || '',
+      phone: u.phone || '',
       role: u.role,
     })
     setEditErr('')
@@ -90,7 +105,8 @@ export function AdminView({ selfUsername }: Props) {
       const res = await adminCreateUser(
         createForm.username.trim(),
         createForm.password,
-        createForm.role
+        createForm.role,
+        { email: createForm.email.trim(), phone: createForm.phone.trim() }
       )
       if (!res.ok) {
         setCreateErr(res.error || t('admin.create.fail'))
@@ -113,6 +129,8 @@ export function AdminView({ selfUsername }: Props) {
     try {
       const res = await adminUpdateUser(editing.id, {
         displayName: editing.displayName.trim(),
+        email: editing.email.trim(),
+        phone: editing.phone.trim(),
         role: editing.role,
       })
       if (!res.ok) {
@@ -176,60 +194,182 @@ export function AdminView({ selfUsername }: Props) {
     }
   }
 
-  return (
-    <div className="panel conn-panel">
-      <header className="panel-head panel-head-row">
-        <div>
-          <h2>{t('admin.title')}</h2>
-          <p>{t('admin.hint')}</p>
-        </div>
-        <button type="button" className="primary" onClick={startNew}>
-          {t('admin.add')}
-        </button>
-      </header>
+  const sideItems: { key: Tab; label: string; icon: string }[] = [
+    {
+      key: 'users',
+      label: t('admin.tab.users'),
+      icon: 'M12 12a4 4 0 1 0 0-8 4 4 0 0 0 0 8z M4 20c1.5-3.5 4.5-5 8-5s6.5 1.5 8 5',
+    },
+    {
+      key: 'roles',
+      label: t('admin.tab.roles'),
+      icon: 'M12 3l8 4v5c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V7l8-4z',
+    },
+  ]
 
-      <div className="conn-list-cards">
-        {users.length === 0 && <div className="card muted">{t('admin.empty')}</div>}
-        {users.map((u) => {
-          const isSelf = u.username === selfUsername
-          const title = u.displayName?.trim() || u.username
-          return (
-            <div key={u.id} className="card conn-card">
-              <div className="conn-card-main">
-                <div className="conn-card-name">
-                  {title}
-                  <span className="tag">{u.role}</span>
-                  {u.banned && <span className="tag danger">{t('admin.tag.banned')}</span>}
-                  {isSelf && <span className="tag ok">{t('admin.tag.self')}</span>}
-                </div>
-                <div className="conn-card-addr mono">
-                  @{u.username}
-                  {u.displayName?.trim() ? ` · ${u.displayName}` : ''}
-                </div>
+  const roleCards = [
+    { key: 'admin', name: t('admin.roles.admin.name'), desc: t('admin.roles.admin.desc') },
+    { key: 'dba', name: t('admin.roles.dba.name'), desc: t('admin.roles.dba.desc') },
+    { key: 'user', name: t('admin.roles.user.name'), desc: t('admin.roles.user.desc') },
+  ]
+
+  return (
+    <div className="sub-layout">
+      {tipNode}
+      <aside className="sub-side" aria-label={t('admin.title')}>
+        <div className="sub-side-head">
+          <strong>{t('admin.title')}</strong>
+          <span>{t('admin.hint')}</span>
+        </div>
+        <nav className="sub-side-nav">
+          {sideItems.map((item) => (
+            <button
+              key={item.key}
+              type="button"
+              className={`sub-side-btn${tab === item.key ? ' on' : ''}`}
+              onClick={() => setTab(item.key)}
+            >
+              <svg className="sub-side-ico" viewBox="0 0 24 24" aria-hidden>
+                <path d={item.icon} fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round" />
+              </svg>
+              <span>{item.label}</span>
+            </button>
+          ))}
+        </nav>
+      </aside>
+
+      <div className="sub-main">
+        {tab === 'users' && (
+          <>
+            <div className="data-table-toolbar">
+              <div>
+                <h2>{t('admin.tab.users')}</h2>
+                <p>{t('admin.hint')}</p>
               </div>
-              <div className="conn-card-actions">
-                <button type="button" className="sm" disabled={busy} onClick={() => startEdit(u)}>
-                  {t('admin.edit')}
-                </button>
-                <button type="button" className="sm" disabled={busy} onClick={() => startPassword(u)}>
-                  {t('admin.password')}
-                </button>
-                <button
-                  type="button"
-                  className={`sm${u.banned ? '' : ' danger'}`}
-                  disabled={busy || isSelf}
-                  title={isSelf ? t('admin.ban.self') : undefined}
-                  onClick={() => setBanTarget(u)}
-                >
-                  {u.banned ? t('admin.unban') : t('admin.ban')}
-                </button>
+              <button type="button" className="primary" onClick={startNew}>
+                {t('admin.add')}
+              </button>
+            </div>
+            <div className="data-table-wrap">
+              {users.length === 0 ? (
+                <div className="data-table-empty">{t('admin.empty')}</div>
+              ) : (
+                <table className="data-table">
+                  <thead>
+                    <tr>
+                      <th style={{ width: '14%' }}>{t('admin.col.user')}</th>
+                      <th style={{ width: '14%' }}>{t('admin.col.email')}</th>
+                      <th style={{ width: '10%' }}>{t('admin.col.phone')}</th>
+                      <th style={{ width: '8%' }}>{t('admin.col.role')}</th>
+                      <th style={{ width: '8%' }}>{t('admin.col.status')}</th>
+                      <th style={{ width: '12%' }}>{t('admin.col.created')}</th>
+                      <th style={{ width: '12%' }}>{t('admin.col.active')}</th>
+                      <th style={{ width: '22%' }}>{t('admin.col.actions')}</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {users.map((u) => {
+                      const isSelf = u.username === selfUsername
+                      const title = u.displayName?.trim() || u.username
+                      return (
+                        <tr key={u.id}>
+                          <td>
+                            <div className="cell-main">
+                              {title}
+                              {isSelf && <span className="pill">{t('admin.tag.self')}</span>}
+                            </div>
+                            <div className="cell-sub mono">@{u.username}</div>
+                          </td>
+                          <td>
+                            <div className="cell-muted">{u.email || '—'}</div>
+                          </td>
+                          <td>
+                            <div className="cell-muted mono">{u.phone || '—'}</div>
+                          </td>
+                          <td>
+                            <span className="tag">{u.role}</span>
+                          </td>
+                          <td>
+                            {u.banned ? (
+                              <span className="tag danger">{t('admin.status.banned')}</span>
+                            ) : (
+                              <span className="tag ok">{t('admin.status.active')}</span>
+                            )}
+                          </td>
+                          <td>
+                            <div className="cell-muted">{u.createdAt || '—'}</div>
+                          </td>
+                          <td>
+                            <div className="cell-muted">
+                              {u.lastLoginAt || t('admin.neverLogin')}
+                            </div>
+                          </td>
+                          <td>
+                            <div className="cell-actions">
+                              <button type="button" className="sm" disabled={busy} onClick={() => startEdit(u)}>
+                                {t('admin.edit')}
+                              </button>
+                              <button type="button" className="sm" disabled={busy} onClick={() => startPassword(u)}>
+                                {t('admin.password')}
+                              </button>
+                              <button
+                                type="button"
+                                className={`sm${u.banned ? '' : ' danger'}`}
+                                disabled={busy || isSelf}
+                                title={isSelf ? t('admin.ban.self') : undefined}
+                                onClick={() => setBanTarget(u)}
+                              >
+                                {u.banned ? t('admin.unban') : t('admin.ban')}
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      )
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
+          </>
+        )}
+
+        {tab === 'roles' && (
+          <>
+            <div className="data-table-toolbar">
+              <div>
+                <h2>{t('admin.tab.roles')}</h2>
+                <p>{t('admin.roles.hint')}</p>
               </div>
             </div>
-          )
-        })}
+            <div className="data-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th style={{ width: '22%' }}>{t('admin.col.roleName')}</th>
+                    <th style={{ width: '14%' }}>{t('admin.col.roleId')}</th>
+                    <th>{t('admin.col.roleDesc')}</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {roleCards.map((r) => (
+                    <tr key={r.key}>
+                      <td>
+                        <div className="cell-main">{r.name}</div>
+                      </td>
+                      <td>
+                        <span className="pill" style={{ marginLeft: 0 }}>{r.key}</span>
+                      </td>
+                      <td>
+                        <div className="cell-muted">{r.desc}</div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
-
-      {tipNode}
 
       {creating && (
         <BodyPortal>
@@ -263,6 +403,27 @@ export function AdminView({ selfUsername }: Props) {
                   autoComplete="new-password"
                   value={createForm.password}
                   onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.email')}
+                <input
+                  type="email"
+                  autoComplete="off"
+                  value={createForm.email}
+                  maxLength={128}
+                  placeholder={t('admin.email.ph')}
+                  onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.phone')}
+                <input
+                  autoComplete="off"
+                  value={createForm.phone}
+                  maxLength={32}
+                  placeholder={t('admin.phone.ph')}
+                  onChange={(e) => setCreateForm({ ...createForm, phone: e.target.value })}
                 />
               </label>
               <label>
@@ -318,6 +479,27 @@ export function AdminView({ selfUsername }: Props) {
                   maxLength={64}
                   placeholder={t('admin.displayName.ph')}
                   onChange={(e) => setEditing({ ...editing, displayName: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.email')}
+                <input
+                  type="email"
+                  autoComplete="off"
+                  value={editing.email}
+                  maxLength={128}
+                  placeholder={t('admin.email.ph')}
+                  onChange={(e) => setEditing({ ...editing, email: e.target.value })}
+                />
+              </label>
+              <label>
+                {t('admin.phone')}
+                <input
+                  autoComplete="off"
+                  value={editing.phone}
+                  maxLength={32}
+                  placeholder={t('admin.phone.ph')}
+                  onChange={(e) => setEditing({ ...editing, phone: e.target.value })}
                 />
               </label>
               <label>

@@ -178,8 +178,9 @@ export function SettingsView() {
   const editingHasKey = !!profiles.find((p) => p.id === form.id)?.hasApiKey
 
   return (
-    <div className="panel conn-panel">
-      <header className="panel-head panel-head-row">
+    <>
+      {tipNode}
+      <div className="data-table-toolbar">
         <div>
           <h2>{t('settings.title')}</h2>
           <p>
@@ -188,63 +189,98 @@ export function SettingsView() {
             {t('settings.headHint.b')}
           </p>
         </div>
-        <button type="button" className="primary" onClick={startNew}>{t('settings.add')}</button>
-      </header>
-
-      <div className="conn-list-cards">
-        {profiles.length === 0 && <div className="card muted">{t('settings.empty')}</div>}
-        {profiles.map((p) => {
-          const result = cardResult[p.id]
-          return (
-            <div key={p.id} className="card conn-card">
-              <div className="conn-card-main">
-                <div className="conn-card-name">
-                  {displayProfileName(p.name, t)}
-                  {p.active && <span className="tag ok">{t('settings.using')}</span>}
-                  {!p.hasApiKey && <span className="tag danger">{t('settings.noKey')}</span>}
-                </div>
-                <div className="conn-card-addr mono">{p.model} · {p.baseUrl}</div>
-                {result && (
-                  <div className={`conn-card-test${result.ok ? ' ok' : ' bad'}`}>{result.message}</div>
-                )}
-              </div>
-              <div className="conn-card-actions">
-                <button
-                  type="button"
-                  className="sm"
-                  disabled={!!cardTesting[p.id]}
-                  onClick={() => void testCard(p)}
-                >
-                  {cardTesting[p.id] ? t('settings.test.testing') : t('settings.test.run')}
-                </button>
-                {!p.active && (
-                  <button type="button" className="sm" disabled={profileBusy} onClick={() => void activate(p)}>
-                    {t('settings.activate')}
-                  </button>
-                )}
-                <button type="button" className="sm" onClick={() => startEdit(p)}>{t('settings.edit')}</button>
-                <button
-                  type="button"
-                  className="sm danger"
-                  disabled={profileBusy || profiles.length <= 1}
-                  title={profiles.length <= 1 ? t('settings.delete.last') : t('settings.delete')}
-                  onClick={() => {
-                    if (profiles.length <= 1) {
-                      showTip(t('settings.delete.last'), 'err')
-                      return
-                    }
-                    setDeleting(p)
-                  }}
-                >
-                  {t('settings.delete')}
-                </button>
-              </div>
-            </div>
-          )
-        })}
+        <button type="button" className="primary" onClick={startNew}>
+          {t('settings.add')}
+        </button>
       </div>
 
-      {tipNode}
+      <div className="data-table-wrap">
+        {profiles.length === 0 ? (
+          <div className="data-table-empty">{t('settings.empty')}</div>
+        ) : (
+          <table className="data-table">
+            <thead>
+              <tr>
+                <th style={{ width: '18%' }}>{t('settings.col.name')}</th>
+                <th style={{ width: '16%' }}>{t('settings.col.model')}</th>
+                <th style={{ width: '28%' }}>{t('settings.col.endpoint')}</th>
+                <th style={{ width: '14%' }}>{t('settings.col.status')}</th>
+                <th style={{ width: '24%' }}>{t('settings.col.actions')}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {profiles.map((p) => {
+                const result = cardResult[p.id]
+                return (
+                  <tr key={p.id} className={p.active ? 'is-selected' : ''}>
+                    <td>
+                      <div className="cell-main">{displayProfileName(p.name, t)}</div>
+                      {result && (
+                        <div className="cell-sub" style={{ color: result.ok ? 'var(--ok)' : 'var(--danger)' }}>
+                          {result.message}
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <div className="cell-muted mono">{p.model}</div>
+                    </td>
+                    <td>
+                      <div className="cell-muted mono" style={{ wordBreak: 'break-all' }}>{p.baseUrl}</div>
+                    </td>
+                    <td>
+                      {p.active ? (
+                        <span className="tag ok">{t('settings.using')}</span>
+                      ) : (
+                        <span className="pill" style={{ marginLeft: 0 }}>{t('settings.idle')}</span>
+                      )}
+                      {!p.hasApiKey && (
+                        <div className="cell-sub">
+                          <span className="tag danger">{t('settings.noKey')}</span>
+                        </div>
+                      )}
+                    </td>
+                    <td>
+                      <div className="cell-actions">
+                        <button
+                          type="button"
+                          className="sm"
+                          disabled={!!cardTesting[p.id]}
+                          onClick={() => void testCard(p)}
+                        >
+                          {cardTesting[p.id] ? t('settings.test.testing') : t('settings.test.run')}
+                        </button>
+                        {!p.active && (
+                          <button type="button" className="sm" disabled={profileBusy} onClick={() => void activate(p)}>
+                            {t('settings.activate')}
+                          </button>
+                        )}
+                        <button type="button" className="sm" onClick={() => startEdit(p)}>
+                          {t('settings.edit')}
+                        </button>
+                        <button
+                          type="button"
+                          className="sm danger"
+                          disabled={profileBusy || profiles.length <= 1}
+                          title={profiles.length <= 1 ? t('settings.delete.last') : t('settings.delete')}
+                          onClick={() => {
+                            if (profiles.length <= 1) {
+                              showTip(t('settings.delete.last'), 'err')
+                              return
+                            }
+                            setDeleting(p)
+                          }}
+                        >
+                          {t('settings.delete')}
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                )
+              })}
+            </tbody>
+          </table>
+        )}
+      </div>
 
       {deleting && (
         <BodyPortal>
@@ -360,6 +396,6 @@ export function SettingsView() {
           </div>
         </BodyPortal>
       )}
-    </div>
+    </>
   )
 }

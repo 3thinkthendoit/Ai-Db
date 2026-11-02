@@ -121,14 +121,25 @@ func ValidAccountRole(role string) bool {
 //
 //	sessions.Gate(users, auth.RequireAdmin(http.HandlerFunc(handler)))
 //
-// This is the single authorisation choke point for admin-only endpoints (user
-// directory, account creation). There is no open registration, so every account
-// after the env-bootstrapped first admin is minted through a RequireAdmin route.
+// Used for sys-only surfaces (shared connection catalog, LLM). User directory
+// uses RequireAdminOrDBA instead.
 func RequireAdmin(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		p, ok := PrincipalFromContext(r.Context())
 		if !ok || p.Role != RoleAdmin {
 			writeForbidden(w, "forbidden: admin only")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// RequireAdminOrDBA allows account administrators and DBAs (user directory).
+func RequireAdminOrDBA(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		p, ok := PrincipalFromContext(r.Context())
+		if !ok || (p.Role != RoleAdmin && p.Role != RoleDBA) {
+			writeForbidden(w, "forbidden: admin or dba only")
 			return
 		}
 		next.ServeHTTP(w, r)

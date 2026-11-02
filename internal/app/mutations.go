@@ -71,23 +71,32 @@ func (s *Service) auditQuery(ctx context.Context, p Principal, connID, sqlText s
 	})
 }
 
-// MutationView is the API projection of a mutation request (no huge surprises).
+// MutationView is the API projection of a SQL change ticket.
 type MutationView struct {
-	ID           string  `json:"id"`
-	CreatedAt    string  `json:"createdAt"`
-	UpdatedAt    string  `json:"updatedAt"`
-	OwnerID      string  `json:"ownerId"`
-	OwnerName    string  `json:"ownerName"`
-	ConnectionID string  `json:"connectionId"`
-	ConnType     string  `json:"connType"`
-	SQLText      string  `json:"sqlText"`
-	StmtClass    string  `json:"stmtClass"`
-	Status       string  `json:"status"`
-	Rollbackable bool    `json:"rollbackable"`
-	ReviewerName string  `json:"reviewerName"`
-	ReviewNote   string  `json:"reviewNote"`
-	ExecutedAt   string  `json:"executedAt,omitempty"`
-	RolledBackAt string  `json:"rolledBackAt,omitempty"`
+	ID             string `json:"id"`
+	CreatedAt      string `json:"createdAt"`
+	UpdatedAt      string `json:"updatedAt"`
+	OwnerID        string `json:"ownerId"`
+	OwnerName      string `json:"ownerName"`
+	ConnectionID   string `json:"connectionId"`
+	ConnectionName string `json:"connectionName"`
+	ConnectionHost string `json:"connectionHost"`
+	ConnectionPort int    `json:"connectionPort"`
+	ConnType       string `json:"connType"`
+	ActiveSchema   string `json:"activeSchema"`
+	Title          string `json:"title"`
+	Remark         string `json:"remark"`
+	DemandURL      string `json:"demandUrl"`
+	SQLText        string `json:"sqlText"`
+	StmtClass      string `json:"stmtClass"`
+	LintResult     string `json:"lintResult"`
+	Status         string `json:"status"`
+	Rollbackable   bool   `json:"rollbackable"`
+	ReviewerName   string `json:"reviewerName"`
+	ReviewNote     string `json:"reviewNote"`
+	ApprovedAt     string `json:"approvedAt,omitempty"`
+	ExecutedAt     string `json:"executedAt,omitempty"`
+	RolledBackAt   string `json:"rolledBackAt,omitempty"`
 }
 
 // QueryAuditView is the API projection of an audit row.
@@ -108,11 +117,16 @@ type QueryAuditView struct {
 func mutationView(m *store.MutationRow) MutationView {
 	v := MutationView{
 		ID: m.ID, OwnerID: m.OwnerID, OwnerName: m.OwnerName,
-		ConnectionID: m.ConnectionID, ConnType: m.ConnType, SQLText: m.SQLText,
-		StmtClass: m.StmtClass, Status: m.Status, Rollbackable: m.Rollbackable,
+		ConnectionID: m.ConnectionID, ConnType: m.ConnType, ActiveSchema: m.ActiveSchema,
+		Title: m.Title, Remark: m.Remark, DemandURL: m.DemandURL,
+		SQLText: m.SQLText, StmtClass: m.StmtClass, LintResult: m.LintResult,
+		Status: m.Status, Rollbackable: m.Rollbackable,
 		ReviewerName: m.ReviewerName, ReviewNote: m.ReviewNote,
 		CreatedAt: m.CreatedAt.UTC().Format(time.RFC3339Nano),
 		UpdatedAt: m.UpdatedAt.UTC().Format(time.RFC3339Nano),
+	}
+	if m.ApprovedAt != nil {
+		v.ApprovedAt = m.ApprovedAt.UTC().Format(time.RFC3339Nano)
 	}
 	if m.ExecutedAt != nil {
 		v.ExecutedAt = m.ExecutedAt.UTC().Format(time.RFC3339Nano)
@@ -121,6 +135,93 @@ func mutationView(m *store.MutationRow) MutationView {
 		v.RolledBackAt = m.RolledBackAt.UTC().Format(time.RFC3339Nano)
 	}
 	return v
+}
+
+func defaultTicketTitle(class db.StmtClass, query string) string {
+	q := strings.Join(strings.Fields(strings.TrimSpace(query)), " ")
+	runes := []rune(q)
+	if len(runes) > 80 {
+		q = string(runes[:80]) + "…"
+	}
+	if q == "" {
+		return string(class) + " ticket"
+	}
+	return q
+}
+
+// submitMutationTicket inserts a pending ticket after lint. Blocks on lint errors.
+func (s *Service) submitMutationTicket(ctx context.Context, p Principal, connectionID, query string, connType config.ConnType, title, remark, demandURL string) (*db.QueryResult, error) {
+	class := db.ClassifySQL(connType, query)
+	if class == db.StmtOther || connType == config.ConnRedis || connType == config.ConnMongo {
+		err := fmt.Errorf("write commands on %s are disabled on the server; use a SQL connection for audited DML", connType)
+		s.auditQuery(ctx, p, connectionID, query, true, "denied", err.Error(), 0, "")
+		return nil, err
+	}
+	if !db.IsMutatingClass(class) {
+		return nil, fmt.Errorf("not a mutating statement")
+	}
+	findings := db.LintSQL(connType, query)
+	lintSummary := db.FormatLintSummary(findings)
+	if db.LintBlocks(findings) {
+		s.auditQuery(ctx, p, connectionID, query, true, "lint_block", lintSummary, 0, "")
+		return nil, fmt.Errorf("lint blocked submission: %s", lintSummary)
+	}
+	rollbackable := class == db.StmtDML
+	if rollbackable {
+		if _, err := db.ParseSimpleDML(query); err != nil {
+			rollbackable = false
+		}
+	}
+	title = strings.TrimSpace(title)
+	if title == "" {
+		title = defaultTicketTitle(class, query)
+	}
+	id := uuid.NewString()
+	s.mu.Lock()
+	activeSchema := s.activeSchemas[connectionID]
+	s.mu.Unlock()
+	row := store.MutationRow{
+		ID: id, OwnerID: p.UserID, OwnerName: p.Username,
+		ConnectionID: connectionID, ConnType: string(connType),
+		ActiveSchema: activeSchema,
+		Title: title, Remark: strings.TrimSpace(remark), DemandURL: strings.TrimSpace(demandURL),
+		SQLText: query, StmtClass: string(class), LintResult: lintSummary,
+		Status: "pending", Rollbackable: rollbackable,
+	}
+	if err := s.mutations.InsertMutation(ctx, row); err != nil {
+		s.auditQuery(ctx, p, connectionID, query, true, "error", err.Error(), 0, "")
+		return nil, fmt.Errorf("submit ticket: %w", err)
+	}
+	s.auditQuery(ctx, p, connectionID, query, true, "pending", "awaiting DBA approval; "+lintSummary, 0, id)
+	return &db.QueryResult{
+		Columns:  []string{"status", "mutation_id", "rollbackable", "lint"},
+		Rows:     [][]string{{"pending_approval", id, fmt.Sprintf("%v", rollbackable), lintSummary}},
+		RowCount: 1,
+		Message:  fmt.Sprintf("Submitted change ticket for DBA approval (id=%s)", id),
+	}, nil
+}
+
+// SubmitMutation creates an explicit SQL change ticket (Archery-style submit).
+// title and content (stored as remark) are required; demandURL is optional.
+func (s *Service) SubmitMutation(ctx context.Context, p Principal, connectionID, query, title, content, demandURL string) (*db.QueryResult, error) {
+	if !s.mutationGateEnabled() {
+		return nil, fmt.Errorf("mutation store not available")
+	}
+	title = strings.TrimSpace(title)
+	content = strings.TrimSpace(content)
+	if title == "" || content == "" {
+		return nil, fmt.Errorf("title and content are required")
+	}
+	s.mu.Lock()
+	c, err := s.findConnLocked(ctx, p, connectionID)
+	if err != nil {
+		s.mu.Unlock()
+		return nil, err
+	}
+	connType := c.Type
+	s.mu.Unlock()
+	// Submitting a ticket only queues for DBA review; Allow Writes gates live execution, not ticket intake.
+	return s.submitMutationTicket(ctx, p, connectionID, query, connType, title, content, demandURL)
 }
 
 // SubmitOrExecuteQuery is the mutation-gate-aware query entry: reads run
@@ -147,68 +248,60 @@ func (s *Service) executeQueryGated(ctx context.Context, p Principal, connection
 		return res, nil
 	}
 
-	// Redis/Mongo writes: forbidden in v1 (no rollback story).
-	if class == db.StmtOther || connType == config.ConnRedis || connType == config.ConnMongo {
-		err := fmt.Errorf("write commands on %s are disabled on the server; use a SQL connection for audited DML", connType)
-		s.auditQuery(ctx, p, connectionID, query, true, "denied", err.Error(), 0, "")
-		return nil, err
-	}
-
-	if !cfg.LLM.AllowWrites {
-		err := fmt.Errorf("writes are disabled in settings; enable Allow Writes to submit changes for DBA approval")
-		s.auditQuery(ctx, p, connectionID, query, true, "denied", err.Error(), 0, "")
-		return nil, err
-	}
-
-	id := uuid.NewString()
-	rollbackable := class == db.StmtDML
-	if rollbackable {
-		if _, err := db.ParseSimpleDML(query); err != nil {
-			rollbackable = false
-		}
-	}
-	s.mu.Lock()
-	activeSchema := s.activeSchemas[connectionID]
-	s.mu.Unlock()
-	row := store.MutationRow{
-		ID: id, OwnerID: p.UserID, OwnerName: p.Username,
-		ConnectionID: connectionID, ConnType: string(connType),
-		ActiveSchema: activeSchema,
-		SQLText: query, StmtClass: string(class), Status: "pending",
-		Rollbackable: rollbackable,
-	}
-	if err := s.mutations.InsertMutation(ctx, row); err != nil {
-		s.auditQuery(ctx, p, connectionID, query, true, "error", err.Error(), 0, "")
-		return nil, fmt.Errorf("submit mutation: %w", err)
-	}
-	s.auditQuery(ctx, p, connectionID, query, true, "pending", "awaiting DBA approval", 0, id)
-	return &db.QueryResult{
-		Columns:  []string{"status", "mutation_id", "rollbackable"},
-		Rows:     [][]string{{"pending_approval", id, fmt.Sprintf("%v", rollbackable)}},
-		RowCount: 1,
-		Message:  fmt.Sprintf("Submitted for DBA approval (id=%s)", id),
-	}, nil
+	// Run path is read-only under the mutation gate; writers must use SubmitMutation.
+	err := fmt.Errorf("run only allows queries; submit a change ticket for write/DDL statements")
+	s.auditQuery(ctx, p, connectionID, query, true, "denied", err.Error(), 0, "")
+	return nil, err
 }
 
-// ListMutations returns mutation requests visible to the caller.
-// DBA sees all (optionally filtered by status); others see only their own.
-func (s *Service) ListMutations(ctx context.Context, p Principal, status string, limit int) ([]MutationView, error) {
+// ListMutations returns mutation tickets visible to the caller.
+// DBA sees all unless mineOnly; others always see only their own.
+func (s *Service) ListMutations(ctx context.Context, p Principal, status string, limit int, mineOnly bool) ([]MutationView, error) {
 	if s.mutations == nil {
 		return nil, fmt.Errorf("mutation store not available")
 	}
 	ownerID := p.UserID
-	if p.Role == "dba" {
+	if roleBypassesGrants(p.Role) && !mineOnly {
 		ownerID = ""
 	}
 	rows, err := s.mutations.ListMutations(ctx, ownerID, status, limit)
 	if err != nil {
 		return nil, err
 	}
+	type connDisp struct {
+		name string
+		host string
+		port int
+	}
+	cache := map[string]connDisp{}
 	out := make([]MutationView, 0, len(rows))
 	for i := range rows {
-		out = append(out, mutationView(&rows[i]))
+		v := mutationView(&rows[i])
+		if d, ok := cache[v.ConnectionID]; ok {
+			v.ConnectionName, v.ConnectionHost, v.ConnectionPort = d.name, d.host, d.port
+		} else if d := s.connectionDisplay(ctx, v.ConnectionID); d.name != "" || d.host != "" {
+			cache[v.ConnectionID] = d
+			v.ConnectionName, v.ConnectionHost, v.ConnectionPort = d.name, d.host, d.port
+		}
+		out = append(out, v)
 	}
 	return out, nil
+}
+
+func (s *Service) connectionDisplay(ctx context.Context, connectionID string) (d struct {
+	name string
+	host string
+	port int
+}) {
+	if connectionID == "" || s.grants == nil {
+		return d
+	}
+	meta, err := s.grants.GetConnectionByID(ctx, connectionID)
+	if err != nil || meta == nil {
+		return d
+	}
+	d.name, d.host, d.port = meta.Name, meta.Host, meta.Port
+	return d
 }
 
 // ListQueryAudit returns audit rows. DBA sees all; others see own.
@@ -217,7 +310,7 @@ func (s *Service) ListQueryAudit(ctx context.Context, p Principal, limit int) ([
 		return nil, fmt.Errorf("mutation store not available")
 	}
 	actorID := p.UserID
-	if p.Role == "dba" {
+	if roleBypassesGrants(p.Role) {
 		actorID = ""
 	}
 	rows, err := s.mutations.ListQueryAudit(ctx, actorID, limit)
@@ -252,10 +345,48 @@ func (s *Service) ensureOpenForOwner(ctx context.Context, owner Principal, connI
 	return nil
 }
 
-// ApproveMutation executes a pending mutation as DBA (dual control: not self).
-func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, note string) (*db.QueryResult, error) {
-	if p.Role != "dba" {
-		return nil, fmt.Errorf("only DBA can approve mutations")
+// ApproveMutation marks a pending ticket approved (does not execute). Dual control: not self.
+func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, note string) error {
+	if !roleBypassesGrants(p.Role) {
+		return fmt.Errorf("only admin or DBA can approve mutations")
+	}
+	if s.mutations == nil {
+		return fmt.Errorf("mutation store not available")
+	}
+	m, err := s.mutations.GetMutation(ctx, mutationID)
+	if err != nil {
+		return err
+	}
+	if m.Status != "pending" {
+		return fmt.Errorf("mutation is %s, not pending", m.Status)
+	}
+	if m.OwnerID == p.UserID {
+		return fmt.Errorf("DBA cannot approve their own mutation request")
+	}
+	ok, err := s.mutations.ClaimMutationStatus(ctx, m.ID, "pending", "approved", p.UserID, p.Username)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return fmt.Errorf("mutation already claimed by another reviewer")
+	}
+	now := time.Now().UTC()
+	m.Status = "approved"
+	m.ReviewerID = p.UserID
+	m.ReviewerName = p.Username
+	m.ReviewNote = strings.TrimSpace(note)
+	m.ApprovedAt = &now
+	if err := s.mutations.UpdateMutation(ctx, *m); err != nil {
+		return err
+	}
+	s.auditQuery(ctx, p, m.ConnectionID, m.SQLText, true, "approved", note, 0, m.ID)
+	return nil
+}
+
+// ExecuteMutation runs an approved ticket as DBA.
+func (s *Service) ExecuteMutation(ctx context.Context, p Principal, mutationID, note string) (*db.QueryResult, error) {
+	if !roleBypassesGrants(p.Role) {
+		return nil, fmt.Errorf("only admin or DBA can execute mutations")
 	}
 	if s.mutations == nil {
 		return nil, fmt.Errorf("mutation store not available")
@@ -264,27 +395,26 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 	if err != nil {
 		return nil, err
 	}
-	if m.Status != "pending" {
-		return nil, fmt.Errorf("mutation is %s, not pending", m.Status)
+	if m.Status != "approved" {
+		return nil, fmt.Errorf("mutation is %s, not approved", m.Status)
 	}
 	if m.OwnerID == p.UserID {
-		return nil, fmt.Errorf("DBA cannot approve their own mutation request")
+		return nil, fmt.Errorf("DBA cannot execute their own mutation request")
 	}
 
-	// CAS claim before touching the target DB — prevents double-exec.
-	ok, err := s.mutations.ClaimMutationStatus(ctx, m.ID, "pending", "executing", p.UserID, p.Username)
+	ok, err := s.mutations.ClaimMutationStatus(ctx, m.ID, "approved", "executing", p.UserID, p.Username)
 	if err != nil {
 		return nil, err
 	}
 	if !ok {
-		return nil, fmt.Errorf("mutation already claimed by another reviewer")
+		return nil, fmt.Errorf("mutation already claimed by another executor")
 	}
 
 	owner := Principal{UserID: m.OwnerID, Username: m.OwnerName, Role: "user"}
 	s.mu.Lock()
 	if _, err := s.findConnLocked(ctx, owner, m.ConnectionID); err != nil {
 		s.mu.Unlock()
-		_, _ = s.mutations.ClaimMutationStatus(ctx, m.ID, "executing", "pending", "", "")
+		_, _ = s.mutations.ClaimMutationStatus(ctx, m.ID, "executing", "approved", p.UserID, p.Username)
 		return nil, fmt.Errorf("owner connection: %w", err)
 	}
 	timeout := s.hardening.QueryTimeout
@@ -295,19 +425,19 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 		defer cancel()
 	}
 
-	// Revert to pending so DBA can retry; "failed" would permanently dead-end the request.
-	failPending := func(execErr error) (*db.QueryResult, error) {
-		_, _ = s.mutations.ClaimMutationStatus(ctx, m.ID, "executing", "pending", "", "")
+	// Revert to approved so DBA can retry execute.
+	failApproved := func(execErr error) (*db.QueryResult, error) {
+		_, _ = s.mutations.ClaimMutationStatus(ctx, m.ID, "executing", "approved", p.UserID, p.Username)
 		s.auditQuery(ctx, p, m.ConnectionID, m.SQLText, true, "error", execErr.Error(), 0, m.ID)
 		return nil, execErr
 	}
 
 	if err := s.ensureOpenForOwner(ctx, owner, m.ConnectionID, m.ActiveSchema); err != nil {
-		return failPending(err)
+		return failApproved(err)
 	}
 	drv, release, err := s.mgr.Acquire(m.ConnectionID)
 	if err != nil {
-		return failPending(err)
+		return failApproved(err)
 	}
 	defer release()
 
@@ -318,22 +448,20 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 
 	switch db.StmtClass(m.StmtClass) {
 	case db.StmtDML:
-		// Prefer snapshot path when the statement is simple + rollbackable; otherwise
-		// plain exec (non-rollbackable) so JOIN/INSERT…SELECT are not stuck forever.
 		if m.Rollbackable {
 			if _, perr := db.ParseSimpleDML(m.SQLText); perr == nil {
 				snapper, ok := drv.(dmlSnapshotDriver)
 				if !ok {
-					return failPending(fmt.Errorf("connection type does not support rollbackable DML"))
+					return failApproved(fmt.Errorf("connection type does not support rollbackable DML"))
 				}
 				var snap *db.RowSnapshot
 				res, snap, err = snapper.ExecuteDMLSnapshot(ctx, m.SQLText)
 				if err != nil {
-					return failPending(fmt.Errorf("execute (snapshot): %w", err))
+					return failApproved(fmt.Errorf("execute (snapshot): %w", err))
 				}
 				snapJSON, err = db.MarshalSnapshot(snap)
 				if err != nil {
-					return failPending(err)
+					return failApproved(err)
 				}
 				rollbackable = true
 				break
@@ -341,17 +469,17 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 		}
 		res, err = drv.Execute(ctx, m.SQLText, 1, true)
 		if err != nil {
-			return failPending(err)
+			return failApproved(err)
 		}
 		rollbackable = false
 	case db.StmtDDL:
 		res, err = execDDLStatements(ctx, drv, m.SQLText)
 		if err != nil {
-			return failPending(err)
+			return failApproved(err)
 		}
 		rollbackable = false
 	default:
-		return failPending(fmt.Errorf("unsupported stmt class %s", m.StmtClass))
+		return failApproved(fmt.Errorf("unsupported stmt class %s", m.StmtClass))
 	}
 
 	now := time.Now().UTC()
@@ -360,10 +488,11 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 	m.BeforeImage = snapJSON
 	m.ReviewerID = p.UserID
 	m.ReviewerName = p.Username
-	m.ReviewNote = strings.TrimSpace(note)
+	if note = strings.TrimSpace(note); note != "" {
+		m.ReviewNote = note
+	}
 	m.ExecutedAt = &now
 	if err := s.mutations.UpdateMutation(ctx, *m); err != nil {
-		// Target DB already changed — leave status executing/failed for operator follow-up.
 		s.auditQuery(ctx, p, m.ConnectionID, m.SQLText, true, "persist_error", err.Error(), time.Since(start).Milliseconds(), m.ID)
 		return nil, fmt.Errorf("persist mutation after execute: %w", err)
 	}
@@ -373,8 +502,8 @@ func (s *Service) ApproveMutation(ctx context.Context, p Principal, mutationID, 
 
 // RejectMutation marks a pending mutation rejected by DBA.
 func (s *Service) RejectMutation(ctx context.Context, p Principal, mutationID, note string) error {
-	if p.Role != "dba" {
-		return fmt.Errorf("only DBA can reject mutations")
+	if !roleBypassesGrants(p.Role) {
+		return fmt.Errorf("only admin or DBA can reject mutations")
 	}
 	if s.mutations == nil {
 		return fmt.Errorf("mutation store not available")
@@ -407,8 +536,8 @@ func (s *Service) RejectMutation(ctx context.Context, p Principal, mutationID, n
 
 // RollbackMutation applies compensating SQL for an executed rollbackable mutation.
 func (s *Service) RollbackMutation(ctx context.Context, p Principal, mutationID, note string) (*db.QueryResult, error) {
-	if p.Role != "dba" {
-		return nil, fmt.Errorf("only DBA can roll back mutations")
+	if !roleBypassesGrants(p.Role) {
+		return nil, fmt.Errorf("only admin or DBA can roll back mutations")
 	}
 	if s.mutations == nil {
 		return nil, fmt.Errorf("mutation store not available")

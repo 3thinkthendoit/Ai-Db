@@ -1,13 +1,14 @@
-import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import { useEffect, useMemo, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from 'react'
 import { MarkdownBody } from '../components/MarkdownBody'
 import { CreateDatabaseModal } from '../components/CreateDatabaseModal'
 import { ObjectTree } from '../components/ObjectTree'
 import { ResultTable } from '../components/ResultTable'
 import { SqlEditor } from '../components/SqlEditor'
 import { ObjectNode, QueryResult } from '../types'
-import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, WritesAllowed, isDesktop } from '../lib/api'
+import { ExecuteQuery, ExpandObject, IsMutatingQuery, SetActiveSchema, SubmitMutation, WritesAllowed, isDesktop } from '../lib/api'
 import { useI18n } from '../i18n'
 import { BodyPortal } from '../lib/portal'
+import { SubmitTicketModal } from '../components/SubmitTicketModal'
 import {
   buildCopyToOtherDbSql,
   buildInserts,
@@ -32,6 +33,8 @@ interface Props {
   /** Run AI analysis; return markdown. Also syncs into Agent task history. */
   onAiAnalyze: (sql: string) => Promise<string>
   onActiveSchemaChange?: (schema: string) => void
+  /** Node/schema/Agent·Query bar — rendered inside the content pane (not over the tree). */
+  toolbar?: ReactNode
 }
 
 type CtxAction =
@@ -390,7 +393,7 @@ function menuFor(connType: string, node: ObjectNode): MenuEntry[] {
   }
 }
 
-export function QueryView({ active = true, connectionId, connected, connType, objects, activeSchema = '', onRefreshObjects, onAiAnalyze, onActiveSchemaChange }: Props) {
+export function QueryView({ active = true, connectionId, connected, connType, objects, activeSchema = '', onRefreshObjects, onAiAnalyze, onActiveSchemaChange, toolbar }: Props) {
   const { t } = useI18n()
   const [tabs, setTabs] = useState<EditorTab[]>(() => [makeTab(connType, 'Query 1')])
   const [activeTabId, setActiveTabId] = useState(() => '')
@@ -401,6 +404,10 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   const [runningTabId, setRunningTabId] = useState<string | null>(null)
   const [ctx, setCtx] = useState<CtxMenu | null>(null)
   const [createDbOpen, setCreateDbOpen] = useState(false)
+  const [ticketOpen, setTicketOpen] = useState(false)
+  const [ticketBusy, setTicketBusy] = useState(false)
+  const [ticketErr, setTicketErr] = useState('')
+  const [ticketSql, setTicketSql] = useState('')
   const [toast, setToast] = useState('')
   const [importTarget, setImportTarget] = useState<ImportTarget | null>(null)
   const [importCsv, setImportCsv] = useState('')
@@ -410,9 +417,10 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
   const [copyDbErr, setCopyDbErr] = useState('')
   const [copyDbBusy, setCopyDbBusy] = useState(false)
   const [splitPct, setSplitPct] = useState(50)
-  const [sideWidth, setSideWidth] = useState(260)
+  /** Align default with admin/ticket sub-side (20% capped at 240). */
+  const [sideWidth, setSideWidth] = useState(240)
   const menuRef = useRef<HTMLDivElement>(null)
-  const editorPaneRef = useRef<HTMLElement>(null)
+  const editorPaneRef = useRef<HTMLDivElement>(null)
   const queryViewRef = useRef<HTMLDivElement>(null)
   const connRef = useRef(connectionId)
   useEffect(() => {
@@ -611,15 +619,18 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       const mutating = await IsMutatingQuery(runConn, nextSql)
       if (connRef.current !== runConn) return
       if (mutating) {
+        // Web: Run is read-only; writes go through「提交工单」.
+        if (!isDesktop()) {
+          patchTab(tabId, { error: t('query.writeUseTicket') })
+          return
+        }
         const allowed = await WritesAllowed()
         if (connRef.current !== runConn) return
         if (!allowed) {
           patchTab(tabId, { error: t('query.writeBlocked') })
           return
         }
-        // Server mutation gate: confirm submits for DBA approval (not immediate exec).
-        const confirmMsg = !isDesktop() ? t('query.writeSubmitConfirm') : t('query.writeConfirm')
-        if (!window.confirm(confirmMsg)) {
+        if (!window.confirm(t('query.writeConfirm'))) {
           return
         }
       }
@@ -1306,7 +1317,8 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
       const rect = root.getBoundingClientRect()
       if (rect.width <= 0) return
       const x = ev.clientX - rect.left
-      setSideWidth(Math.min(Math.floor(rect.width * 0.55), Math.max(160, Math.floor(x))))
+      // Keep drag, but stay near sub-side band: min 180, max min(240, 40% viewport).
+      setSideWidth(Math.min(240, Math.floor(rect.width * 0.4), Math.max(180, Math.floor(x))))
     }
     const onUp = () => {
       document.body.classList.remove('query-side-splitting')
@@ -1347,7 +1359,9 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
         title={t('query.sideSplitDrag')}
         onMouseDown={onSideSplitDown}
       />
-      <section className="editor-pane" ref={editorPaneRef}>
+      <section className="editor-pane">
+        {toolbar}
+        <div className="editor-pane-body" ref={editorPaneRef}>
         <div className="query-top" style={{ flex: `0 0 ${splitPct}%` }}>
           <div className="query-tabs" role="tablist" aria-label={t('query.tabs')}>
             {tabs.map((tab) => (
@@ -1464,6 +1478,36 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
               >
                 {aiBusy ? t('query.aiAnalyzing') : t('query.agentExplain')}
               </button>
+              {!isDesktop() && (
+                <button
+                  type="button"
+                  className="sm"
+                  disabled={busy || !connected || !sql.trim() || isNonSQL(connType) || !activeTab || ticketOpen}
+                  title={t('dba.submitTicket')}
+                  onClick={() => {
+                    const tabId = activeTab?.id
+                    if (!connectionId || !sql.trim() || !tabId) return
+                    void (async () => {
+                      const snapshot = sql.trim()
+                      try {
+                        const mutating = await IsMutatingQuery(connectionId, snapshot)
+                        if (!mutating) {
+                          patchTab(tabId, { error: t('dba.submitTicket.queryOnly') })
+                          return
+                        }
+                        // Ticket submit only queues for DBA review — do not gate on Allow Writes.
+                        setTicketSql(snapshot)
+                        setTicketErr('')
+                        setTicketOpen(true)
+                      } catch (e: any) {
+                        patchTab(tabId, { error: String(e?.message || e) })
+                      }
+                    })()
+                  }}
+                >
+                  {t('dba.submitTicket')}
+                </button>
+              )}
               <button type="button" className="primary" disabled={busy || !connected} onClick={() => void runSql(sql)}>
                 {runningTabId === activeTab?.id ? t('query.running') : t('query.run')}
               </button>
@@ -1538,6 +1582,7 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
             <ResultTable result={result} />
           )}
         </div>
+        </div>
       </section>
 
       {createDbOpen && (
@@ -1548,6 +1593,29 @@ export function QueryView({ active = true, connectionId, connected, connType, ob
           onCreated={() => {
             onRefreshObjects()
             flash(t('query.createDb.done'))
+          }}
+        />
+      )}
+
+      {ticketOpen && (
+        <SubmitTicketModal
+          sql={ticketSql}
+          busy={ticketBusy}
+          error={ticketErr}
+          onClose={() => !ticketBusy && setTicketOpen(false)}
+          onSubmit={async (title, content) => {
+            if (!connectionId || !ticketSql) return
+            setTicketBusy(true)
+            setTicketErr('')
+            try {
+              await SubmitMutation(connectionId, ticketSql, title, content)
+              setTicketOpen(false)
+              flash(t('dba.submitTicket.ok'))
+            } catch (e: any) {
+              setTicketErr(String(e?.message || e))
+            } finally {
+              setTicketBusy(false)
+            }
           }}
         />
       )}

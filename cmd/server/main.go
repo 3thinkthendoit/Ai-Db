@@ -188,11 +188,11 @@ func run(ctx context.Context) error {
 	mux.Handle("GET /api/me", s.gate(http.HandlerFunc(s.handleGetMe)))
 	mux.Handle("PUT /api/me", s.gate(http.HandlerFunc(s.handleUpdateMe)))
 	mux.Handle("POST /api/me/password", s.gate(http.HandlerFunc(s.handleChangePassword)))
-	// Admin-only account management (RequireAdmin runs inside the live account gate).
-	mux.Handle("POST /api/admin/users", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminCreateUser))))
-	mux.Handle("GET /api/admin/users", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminListUsers))))
-	mux.Handle("PATCH /api/admin/users/{id}", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminUpdateUser))))
-	mux.Handle("POST /api/admin/users/{id}/password", s.gate(auth.RequireAdmin(http.HandlerFunc(s.handleAdminSetPassword))))
+	// Account management: admin and dba (RequireAdminOrDBA inside the live account gate).
+	mux.Handle("POST /api/admin/users", s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminCreateUser))))
+	mux.Handle("GET /api/admin/users", s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminListUsers))))
+	mux.Handle("PATCH /api/admin/users/{id}", s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminUpdateUser))))
+	mux.Handle("POST /api/admin/users/{id}/password", s.gate(auth.RequireAdminOrDBA(http.HandlerFunc(s.handleAdminSetPassword))))
 
 	// Same-origin static hosting of the built web UI (frontend/dist, embedded via
 	// the AI-DB/frontend package). Registered as the least-specific "GET /" so
@@ -304,6 +304,10 @@ func (s *server) handleLogin(w http.ResponseWriter, r *http.Request) {
 	s.loginLimit.recordSuccess(userKey)
 	s.loginIPLimit.recordSuccess(ipKey)
 	s.audit.loginSuccess(r, u.Username, u.Role)
+	// Best-effort; login still succeeds if the stamp fails.
+	if err := s.users.TouchLastLogin(r.Context(), u.ID); err != nil {
+		log.Printf("touch last_login_at for %s: %v", u.Username, err)
+	}
 	http.SetCookie(w, s.sessions.Cookie(value))
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "username": u.Username, "role": u.Role})
 }
@@ -359,6 +363,8 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		Username string `json:"username"`
 		Password string `json:"password"`
 		Role     string `json:"role"`
+		Email    string `json:"email"`
+		Phone    string `json:"phone"`
 	}
 	r.Body = http.MaxBytesReader(w, r.Body, maxAuthBodyBytes)
 	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
@@ -366,11 +372,21 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	body.Username = strings.TrimSpace(body.Username)
+	body.Email = strings.TrimSpace(body.Email)
+	body.Phone = strings.TrimSpace(body.Phone)
 	if body.Username == "" || body.Password == "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "username and password are required"})
 		return
 	}
 	if msg := validatePassword(body.Password); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
+		return
+	}
+	if msg := validateEmail(body.Email); msg != "" {
+		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
+		return
+	}
+	if msg := validatePhone(body.Phone); msg != "" {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": msg})
 		return
 	}
@@ -380,6 +396,11 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	if !auth.ValidAccountRole(role) {
 		writeJSON(w, http.StatusBadRequest, map[string]any{"ok": false, "error": "role must be admin, dba, or user"})
+		return
+	}
+	// DBA may manage users/dba accounts but must not mint admins.
+	if p, ok := auth.PrincipalFromContext(r.Context()); ok && p.Role == auth.RoleDBA && role == auth.RoleAdmin {
+		writeJSON(w, http.StatusForbidden, map[string]any{"ok": false, "error": "dba cannot create admin accounts"})
 		return
 	}
 	if _, err := s.users.ByUsername(r.Context(), body.Username); err == nil {
@@ -397,7 +418,10 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusInternalServerError, map[string]any{"ok": false, "error": "hash error"})
 		return
 	}
-	u := auth.User{ID: uuid.NewString(), Username: body.Username, PasswordHash: hash, Role: role}
+	u := auth.User{
+		ID: uuid.NewString(), Username: body.Username, PasswordHash: hash, Role: role,
+		Email: body.Email, Phone: body.Phone,
+	}
 	if err := s.users.Create(r.Context(), u); err != nil {
 		log.Printf("admin create user: create %q failed: %v", u.Username, err)
 		s.audit.adminCreateUser(r, actor, u.Username, u.Role, "error", "create failed")
@@ -406,7 +430,10 @@ func (s *server) handleAdminCreateUser(w http.ResponseWriter, r *http.Request) {
 	}
 	// The structured audit line supersedes the old plain log line.
 	s.audit.adminCreateUser(r, actor, u.Username, u.Role, "success", "")
-	writeJSON(w, http.StatusOK, map[string]any{"ok": true, "id": u.ID, "username": u.Username, "role": u.Role})
+	writeJSON(w, http.StatusOK, map[string]any{
+		"ok": true, "id": u.ID, "username": u.Username, "role": u.Role,
+		"email": u.Email, "phone": u.Phone,
+	})
 }
 
 // handleAdminListUsers returns the account directory (admin-only), projected to a
@@ -428,14 +455,23 @@ func (s *server) handleAdminListUsers(w http.ResponseWriter, r *http.Request) {
 		Username    string `json:"username"`
 		Role        string `json:"role"`
 		DisplayName string `json:"displayName"`
+		Email       string `json:"email"`
+		Phone       string `json:"phone"`
 		Banned      bool   `json:"banned"`
+		CreatedAt   string `json:"createdAt"`
+		LastLoginAt string `json:"lastLoginAt,omitempty"`
 	}
 	out := make([]userView, 0, len(all))
 	for _, u := range all {
-		out = append(out, userView{
+		v := userView{
 			ID: u.ID, Username: u.Username, Role: u.Role,
-			DisplayName: u.DisplayName, Banned: u.Banned,
-		})
+			DisplayName: u.DisplayName, Email: u.Email, Phone: u.Phone, Banned: u.Banned,
+			CreatedAt: u.CreatedAt.UTC().Format(time.RFC3339Nano),
+		}
+		if !u.LastLoginAt.IsZero() {
+			v.LastLoginAt = u.LastLoginAt.UTC().Format(time.RFC3339Nano)
+		}
+		out = append(out, v)
 	}
 	s.audit.adminListUsers(r, actor, len(all), "success")
 	writeJSON(w, http.StatusOK, out)
